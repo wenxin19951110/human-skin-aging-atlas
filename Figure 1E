@@ -1,0 +1,227 @@
+
+
+import scanpy as sc
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+
+scrna = sc.read_h5ad(
+    root / "Integrated_8Donor_Skin" /
+    "Human_Skin_8Donors_Harmony_UMAP.h5ad",
+    backed="r"
+)
+
+# 先检查基因名称是否重复
+print("scRNA genes:", scrna.n_vars)
+print("MERFISH genes:", merfish.n_vars)
+
+shared_genes = sorted(
+    set(scrna.var_names) & set(merfish.var_names)
+)
+
+print("Shared genes:", len(shared_genes))
+print("First 30:", shared_genes[:30])
+
+# 查看可用的细胞类型注释
+print("\nscRNA annotations:")
+print([
+    c for c in scrna.obs.columns
+    if any(k in c.lower() for k in
+           ["cell", "type", "annot", "cluster", "broad"])
+])
+
+print("\nBroad cell types:")
+print(scrna.obs["unified_broad"].value_counts())
+
+print("\nAvailable layers:")
+print("scRNA:", list(scrna.layers.keys()))
+print("MERFISH:", list(merfish.layers.keys()))
+
+
+
+
+import numpy as np
+import pandas as pd
+import scipy.sparse as sp
+
+# Ensure consistent gene order
+shared_genes = sorted(
+    set(scrna.var_names) & set(merfish.var_names)
+)
+
+print("Shared genes:", len(shared_genes))
+
+# scRNA-seq: use existing X matrix (previously log-normalised)
+scrna_types = scrna.obs["unified_broad"].astype(str).to_numpy()
+
+# Read only shared genes
+gene_idx = scrna.var_names.get_indexer(shared_genes)
+X = scrna[:, gene_idx].X
+
+if sp.issparse(X):
+    X = X.toarray()
+else:
+    X = np.asarray(X)
+
+types = sorted(np.unique(scrna_types))
+
+scrna_means = []
+for t in types:
+    m = scrna_types == t
+    scrna_means.append(X[m].mean(axis=0))
+
+scrna_mean_df = pd.DataFrame(
+    np.vstack(scrna_means),
+    index=types,
+    columns=shared_genes
+)
+
+print("scRNA mean matrix:", scrna_mean_df.shape)
+
+
+
+
+# MERFISH mean_df comes from previous analysis
+merfish_mean_df = mean_df.loc[:, shared_genes].copy()
+
+print("MERFISH mean matrix:", merfish_mean_df.shape)
+
+
+
+
+
+def gene_zscore(df):
+    mu = df.mean(axis=0)
+    sd = df.std(axis=0, ddof=0).replace(0, np.nan)
+    return (df - mu) / sd
+
+# Standardise within each platform
+scrna_z = gene_zscore(scrna_mean_df)
+merfish_z = gene_zscore(merfish_mean_df)
+
+# Keep only genes with variation in both platforms
+valid_genes = (
+    scrna_z.notna().all(axis=0) &
+    merfish_z.notna().all(axis=0)
+)
+
+scrna_z = scrna_z.loc[:, valid_genes]
+merfish_z = merfish_z.loc[:, valid_genes]
+
+print("Genes retained after QC:", scrna_z.shape[1])
+
+
+
+
+
+from scipy.stats import spearmanr
+
+A = scrna_z.to_numpy()
+B = merfish_z.to_numpy()
+
+# Spearman correlation between cell-type profiles
+cross_corr = np.zeros((A.shape[0], B.shape[0]))
+
+for i in range(A.shape[0]):
+    for j in range(B.shape[0]):
+        cross_corr[i, j] = spearmanr(
+            A[i], B[j]
+        ).statistic
+
+cross_corr_df = pd.DataFrame(
+    cross_corr,
+    index=scrna_z.index,
+    columns=merfish_z.index
+)
+
+print("Cross-platform matrix:", cross_corr_df.shape)
+print("Correlation range:",
+      cross_corr_df.min().min(),
+      cross_corr_df.max().max())
+
+
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+# scRNA-seq type order
+scrna_order = [
+    "Bas KC", "Cyc KC", "Diff KC",
+    "Melano", "HFE", "Ecc Gland",
+    "Fib", "Peri", "EC", "LEC",
+    "Lym", "Myel"
+]
+
+scrna_order = [
+    x for x in scrna_order
+    if x in cross_corr_df.index
+]
+
+# Add any remaining types
+scrna_order += [
+    x for x in cross_corr_df.index
+    if x not in scrna_order
+]
+
+# MERFISH detailed types in compartment order
+merfish_order = [
+    t for g in ["Epithelia", "Stroma", "Immune"]
+    for t in sorted(
+        x for x in cross_corr_df.columns
+        if label_to_group.get(x) == g
+    )
+]
+
+heatmap_data = cross_corr_df.loc[
+    scrna_order, merfish_order
+]
+
+fig, ax = plt.subplots(figsize=(19, 6))
+
+sns.heatmap(
+    heatmap_data,
+    cmap="bwr",
+    vmin=-1,
+    vmax=1,
+    center=0,
+    xticklabels=True,
+    yticklabels=True,
+    cbar_kws={
+        "label": "Spearman correlation",
+        "shrink": 0.7
+    },
+    ax=ax
+)
+
+ax.set_title(
+    "Cross-platform cell-type transcriptional similarity",
+    fontsize=17,
+    pad=15
+)
+
+ax.set_ylabel("scRNA-seq")
+ax.set_xlabel("MERFISH")
+
+ax.tick_params(axis="x", labelrotation=90, labelsize=8)
+ax.tick_params(axis="y", labelrotation=0, labelsize=10)
+
+plt.tight_layout()
+
+outdir = Path(
+    "/home/ecs-user/skin_spatial_project/"
+    "Cross_Dataset_Integration/figures"
+)
+outdir.mkdir(parents=True, exist_ok=True)
+
+png = outdir / "Fig1F_scRNA_MERFISH_CrossPlatform_Heatmap.png"
+pdf = outdir / "Fig1F_scRNA_MERFISH_CrossPlatform_Heatmap.pdf"
+
+fig.savefig(png, dpi=450, bbox_inches="tight",
+            facecolor="white")
+fig.savefig(pdf, bbox_inches="tight",
+            facecolor="white")
+
+plt.show()
+
+print("Saved:", png)
