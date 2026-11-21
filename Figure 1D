@@ -1,0 +1,342 @@
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Restrepo_MERFISH" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+# 1. Select the same two anatomical sites as Figure 1D
+sites = ["inguinal fold", "buttocks"]
+
+obs = merfish.obs
+mask = obs["anatomic_site"].isin(sites).to_numpy()
+
+meta = obs.loc[
+    mask,
+    ["anatomic_site", "cell_type.broad", "cell_type.detailed"]
+].copy().reset_index(drop=True)
+
+# Use the published scANVI UMAP embedding
+xy = np.asarray(merfish.obsm["scanvi_umap"])[mask, :2]
+
+# Exclude doublets and unknown annotations
+valid = (
+    meta["cell_type.broad"].notna() &
+    meta["cell_type.detailed"].notna() &
+    ~meta["cell_type.detailed"].astype(str).isin(
+        ["Doublet", "Unknown"]
+    )
+)
+
+meta = meta.loc[valid].reset_index(drop=True)
+xy = xy[valid.to_numpy()]
+
+print("Cells retained:", len(meta))
+
+# 2. Define compartments from published broad annotations
+compartment_map = {
+    # Epithelia
+    "Bas KC": "Epithelia",
+    "Spn KC": "Epithelia",
+    "Grn KC": "Epithelia",
+    "HFE": "Epithelia",
+    "Seb": "Epithelia",
+    "Ecc Duct": "Epithelia",
+    "Ecc Gland": "Epithelia",
+
+    # Stroma
+    "Fibro": "Stroma",
+    "Peri": "Stroma",
+    "EC": "Stroma",
+    "LEC": "Stroma",
+    "Adipo": "Stroma",
+    "Schwann": "Stroma",
+
+    # Immune
+    "Lym": "Immune",
+    "Mac/DC": "Immune",
+    "Mast": "Immune",
+    "Plasma": "Immune",
+    "LC": "Immune",
+}
+
+meta["compartment"] = (
+    meta["cell_type.broad"].astype(str)
+    .map(compartment_map)
+)
+
+print("\nCompartment counts:")
+print(meta["compartment"].value_counts(dropna=False))
+
+# Check for annotations that require manual mapping
+unmapped = meta.loc[
+    meta["compartment"].isna(),
+    "cell_type.broad"
+].value_counts()
+
+print("\nUnmapped broad types:")
+print(unmapped)
+
+# 3. Publication-style 3-panel UMAP
+fig, axes = plt.subplots(1, 3, figsize=(19, 7))
+
+groups = ["Epithelia", "Stroma", "Immune"]
+
+for ax, group in zip(axes, groups):
+
+    subset = meta["compartment"].eq(group).to_numpy()
+    points = xy[subset]
+    labels = meta.loc[
+        subset, "cell_type.detailed"
+    ].astype(str).to_numpy()
+
+    types = sorted(np.unique(labels))
+
+    # Distinct colours within each compartment
+    cmap = plt.get_cmap(
+        "tab20" if len(types) <= 20 else "gist_ncar"
+    )
+    colors = {
+        ct: cmap(i / max(len(types)-1, 1))
+        for i, ct in enumerate(types)
+    }
+
+    for ct in types:
+        m = labels == ct
+
+        ax.scatter(
+            points[m, 0],
+            points[m, 1],
+            s=2.0,
+            color=colors[ct],
+            alpha=0.8,
+            linewidths=0,
+            rasterized=True
+        )
+
+    ax.set_title(
+        f"{group}\n(n={len(points):,} cells)",
+        fontsize=16,
+        pad=12
+    )
+
+    ax.set_xlabel("UMAP 1", fontsize=11)
+    ax.set_ylabel("UMAP 2", fontsize=11)
+
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_aspect("equal", adjustable="datalim")
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    # Compact legend below each panel
+    handles = [
+        Line2D(
+            [0], [0],
+            marker="o",
+            linestyle="",
+            markerfacecolor=colors[ct],
+            markeredgecolor="none",
+            markersize=6,
+            label=ct
+        )
+        for ct in types
+    ]
+
+    ax.legend(
+        handles=handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.08),
+        frameon=False,
+        ncol=3,
+        fontsize=8,
+        columnspacing=0.8,
+        handletextpad=0.3
+    )
+
+    print(f"\n{group}: {len(points):,} cells")
+    print(pd.Series(labels).value_counts().to_string())
+
+fig.suptitle(
+    "MERFISH | Detailed cell populations",
+    fontsize=19,
+    y=1.02
+)
+
+fig.subplots_adjust(
+    left=0.04, right=0.98,
+    top=0.87, bottom=0.35,
+    wspace=0.15
+)
+
+png = outdir / "Fig1E_MERFISH_Detailed_UMAP.png"
+pdf = outdir / "Fig1E_MERFISH_Detailed_UMAP.pdf"
+
+fig.savefig(
+    png,
+    dpi=450,
+    bbox_inches="tight",
+    facecolor="white"
+)
+fig.savefig(
+    pdf,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+plt.show()
+
+print("\nSaved PNG:", png)
+print("Saved PDF:", pdf)
+
+
+# Curated compartment assignment from detailed cell labels
+
+epithelia = {
+    "Bas KC", "Spn KC I", "Spn KC II",
+    "Grn KC", "Cyc KC",
+    "Bas Inf", "Diff Inf",
+    "Bulge", "ORS Basal", "ORS Suprabasal",
+    "IRS/HS", "Melano",
+    "Bas Seb", "Diff Seb",
+    "Ecc Duct", "Ecc Gland", "Ecc Myoepi"
+}
+
+stroma = {
+    "Papil Fib", "Retic Fib I", "Retic Fib II",
+    "Retic Fib III", "Perivasc Fib I",
+    "Perivasc Fib II", "Perineural Fib",
+    "Peri", "VEC", "HEC", "LEC",
+    "Adipo", "Schwann", "SM", "DS", "DP"
+}
+
+immune = {
+    "Mac", "Mono", "CD1C+ DC", "CLEC9A+ DC",
+    "CCR7+ DC", "Cyc Imm", "LC",
+    "CD4+ Th", "CD4+ Treg", "CD8+ Tc",
+    "Naive T", "Naïve T",
+    "Mast", "Plasma"
+}
+
+# Display any labels not captured by our classification
+all_labels = set(
+    meta["cell_type.detailed"].dropna().astype(str).unique()
+)
+unmapped = all_labels - epithelia - stroma - immune
+print("Unmapped detailed annotations:", sorted(unmapped))
+
+def assign_compartment(ct):
+    if ct in epithelia:
+        return "Epithelia"
+    if ct in stroma:
+        return "Stroma"
+    if ct in immune:
+        return "Immune"
+    return "Unassigned"
+
+meta["compartment_refined"] = (
+    meta["cell_type.detailed"]
+    .astype(str)
+    .map(assign_compartment)
+)
+
+print("\nRefined counts:")
+print(meta["compartment_refined"].value_counts())
+
+# QC: verify each detailed label belongs to one group
+print("\nCompartment vs broad annotation:")
+print(pd.crosstab(
+    meta["compartment_refined"],
+    meta["cell_type.broad"]
+))
+
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.lines import Line2D
+
+groups = ["Epithelia", "Stroma", "Immune"]
+fig, axes = plt.subplots(1, 3, figsize=(19, 7))
+
+for ax, group in zip(axes, groups):
+    mask = (
+        meta["compartment_refined"] == group
+    ).to_numpy()
+
+    points = xy[mask]
+    labels = meta.loc[
+        mask, "cell_type.detailed"
+    ].astype(str).to_numpy()
+
+    types = sorted(np.unique(labels))
+    cmap = plt.get_cmap(
+        "tab20" if len(types) <= 20 else "gist_ncar"
+    )
+    colors = {
+        ct: cmap(i / max(len(types)-1, 1))
+        for i, ct in enumerate(types)
+    }
+
+    for ct in types:
+        m = labels == ct
+        ax.scatter(
+            points[m, 0], points[m, 1],
+            s=2, color=colors[ct],
+            alpha=0.8, linewidths=0,
+            rasterized=True
+        )
+
+    ax.set_title(
+        f"{group} | n={len(points):,}",
+        fontsize=15
+    )
+    ax.set_xlabel("UMAP 1")
+    ax.set_ylabel("UMAP 2")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_aspect("equal")
+    ax.spines[:].set_visible(False)
+
+    handles = [
+        Line2D(
+            [0], [0], marker="o", linestyle="",
+            markerfacecolor=colors[ct],
+            markeredgecolor="none",
+            markersize=6, label=ct
+        )
+        for ct in types
+    ]
+
+    ax.legend(
+        handles=handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.08),
+        ncol=3, fontsize=8,
+        frameon=False
+    )
+
+fig.suptitle(
+    "MERFISH | Detailed skin cell populations",
+    fontsize=18, y=1.02
+)
+
+fig.subplots_adjust(
+    left=0.04, right=0.98,
+    top=0.88, bottom=0.33,
+    wspace=0.14
+)
+
+png = outdir / "Fig1E_MERFISH_Detailed_UMAP_Refined.png"
+pdf = outdir / "Fig1E_MERFISH_Detailed_UMAP_Refined.pdf"
+
+fig.savefig(png, dpi=450, bbox_inches="tight",
+            facecolor="white")
+fig.savefig(pdf, bbox_inches="tight",
+            facecolor="white")
+
+plt.show()
+print("Saved:", png)
