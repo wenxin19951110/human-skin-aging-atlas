@@ -1,0 +1,440 @@
+import scanpy as sc
+import pandas as pd
+import numpy as np
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+
+merfish = sc.read_h5ad(
+    root / "Restrepo_MERFISH" /
+    "merfish.integrated_annotated.h5ad",
+    backed="r"
+)
+
+print("MERFISH shape:", merfish.shape)
+
+# 检查年龄相关列
+age_cols = [
+    c for c in merfish.obs.columns
+    if "age" in c.lower()
+]
+
+print("Age columns:", age_cols)
+
+for col in age_cols:
+    print(f"\n{col}:")
+    print(merfish.obs[col].value_counts().head(20))
+
+sites = ["inguinal fold", "buttocks"]
+
+metadata = merfish.obs.loc[
+    merfish.obs["anatomic_site"].isin(sites),
+    ["anatomic_site", "donor_age", "run_region"]
+].copy()
+
+print("Cells by site and age:")
+print(
+    pd.crosstab(
+        metadata["donor_age"],
+        metadata["anatomic_site"]
+    )
+)
+
+import pandas as pd
+
+obs = merfish.obs
+
+# 找出可能的供体标识列
+print("Possible donor columns:")
+print([c for c in obs.columns
+       if "donor" in c.lower() or "barcode" in c.lower()])
+
+# 提取4组
+selected = obs.loc[
+    obs["anatomic_site"].isin(
+        ["inguinal fold", "buttocks"]
+    ) &
+    obs["donor_age"].isin([36.0, 82.0])
+].copy()
+
+cols = [
+    "anatomic_site",
+    "donor_age",
+    "sample_barcode",
+    "run_region"
+]
+
+cols = [c for c in cols if c in selected.columns]
+
+summary = (
+    selected.groupby(cols, observed=True)
+    .size()
+    .reset_index(name="n_cells")
+    .sort_values(
+        ["anatomic_site", "donor_age", "n_cells"],
+        ascending=[True, True, False]
+    )
+)
+
+display(summary)
+
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Restrepo_MERFISH" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+# 已确认的4张真实组织切片
+selected_regions = {
+    ("buttocks", 36): "D151--7-12--03152024.region_4",
+    ("buttocks", 82): "D149--7-12--04302024.region_5",
+    ("inguinal fold", 36): "D151--7-12--03152024.region_5",
+    ("inguinal fold", 82): "D149--7-12--04302024.region_1",
+}
+
+# 从现有MERFISH对象中读取元数据
+obs = merfish.obs
+
+# 为避免读取整个表达矩阵，仅获取所需细胞的空间坐标
+mask = obs["run_region"].isin(selected_regions.values()).to_numpy()
+
+meta = obs.loc[
+    mask,
+    ["run_region", "anatomic_site", "donor_age",
+     "donor_id", "cell_type.broad", "cell_type.detailed"]
+].copy().reset_index(drop=True)
+
+coords = np.asarray(merfish.obsm["spatial"])[mask, :2]
+
+print("Selected cells:", len(meta))
+print(meta["run_region"].value_counts())
+
+# 排除已标记的Doublet/Unknown
+valid = ~meta["cell_type.detailed"].astype(str).isin(
+    ["Doublet", "Unknown"]
+)
+
+meta = meta.loc[valid].reset_index(drop=True)
+coords = coords[valid.to_numpy()]
+
+# 固定所有面板的broad cell type颜色
+celltypes = sorted(meta["cell_type.broad"].dropna().unique())
+cmap = plt.get_cmap("tab20", len(celltypes))
+palette = {ct: cmap(i) for i, ct in enumerate(celltypes)}
+
+fig, axes = plt.subplots(2, 2, figsize=(11, 12))
+
+layout = [
+    (0, 0, "inguinal fold", 36, "Inguinal fold | 36y"),
+    (0, 1, "inguinal fold", 82, "Inguinal fold | 82y"),
+    (1, 0, "buttocks", 36, "Buttocks | 36y"),
+    (1, 1, "buttocks", 82, "Buttocks | 82y"),
+]
+
+for r, c, site, age, title in layout:
+    ax = axes[r, c]
+    rr = selected_regions[(site, age)]
+
+    m = (meta["run_region"] == rr).to_numpy()
+
+    xy = coords[m]
+    labels = meta.loc[m, "cell_type.broad"].astype(str).to_numpy()
+
+    for ct in celltypes:
+        cmask = labels == ct
+        if not cmask.any():
+            continue
+
+        ax.scatter(
+            xy[cmask, 0],
+            xy[cmask, 1],
+            s=2.0,
+            color=palette[ct],
+            alpha=0.85,
+            linewidths=0,
+            rasterized=True
+        )
+
+    ax.set_title(
+        f"{title}\n(n={len(xy):,} cells)",
+        fontsize=13, pad=10
+    )
+
+    ax.set_aspect("equal")
+    ax.invert_yaxis()
+    ax.axis("off")
+
+# 统一图例
+handles = [
+    Line2D(
+        [0], [0],
+        marker="o", linestyle="",
+        markerfacecolor=palette[ct],
+        markeredgecolor="none",
+        markersize=7,
+        label=ct
+    )
+    for ct in celltypes
+]
+
+fig.legend(
+    handles=handles,
+    loc="center left",
+    bbox_to_anchor=(0.83, 0.5),
+    frameon=False,
+    fontsize=9
+)
+
+fig.suptitle(
+    "MERFISH | Spatial distribution of human skin cell types",
+    fontsize=16, y=0.97
+)
+
+fig.subplots_adjust(
+    left=0.03, right=0.81,
+    top=0.90, bottom=0.04,
+    wspace=0.12, hspace=0.15
+)
+
+png = outdir / "Fig1D_MERFISH_YoungOld_TwoSites_Spatial.png"
+pdf = outdir / "Fig1D_MERFISH_YoungOld_TwoSites_Spatial.pdf"
+
+fig.savefig(png, dpi=450, bbox_inches="tight",
+            facecolor="white")
+fig.savefig(pdf, bbox_inches="tight",
+            facecolor="white")
+
+plt.show()
+
+print("Saved PNG:", png)
+print("Saved PDF:", pdf)
+
+
+def add_scalebar(ax, length=1000, label="1 mm"):
+    """
+    length: number of spatial coordinate units.
+    Use 1000 only after verifying that coordinates are in µm.
+    """
+    x_left, x_right = ax.get_xlim()
+    y_toplimit, y_bottomlimit = ax.get_ylim()
+
+    width = x_right - x_left
+    height = abs(y_bottomlimit - y_toplimit)
+
+    # 左下角，适用于invert_yaxis之后的坐标
+    x0 = x_left + 0.07 * width
+    y0 = max(y_toplimit, y_bottomlimit) - 0.06 * height
+
+    ax.plot(
+        [x0, x0 + length],
+        [y0, y0],
+        color="black",
+        linewidth=3.5,
+        solid_capstyle="butt",
+        clip_on=False
+    )
+
+    ax.text(
+        x0 + length / 2,
+        y0 - 0.025 * height,
+        label,
+        ha="center",
+        va="bottom",
+        fontsize=10
+    )
+ax.set_title(
+    f"{title}\n(n={len(xy):,} cells)",
+    fontsize=13,
+    pad=10
+)
+
+ax.set_aspect("equal")
+ax.invert_yaxis()
+ax.axis("off")
+
+# 先核实坐标单位；确认是µm后启用
+# add_scalebar(ax, length=1000, label="1 mm")
+
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Restrepo_MERFISH" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+# Four previously verified tissue regions
+regions = {
+    ("inguinal fold", 36): "D151--7-12--03152024.region_5",
+    ("inguinal fold", 82): "D149--7-12--04302024.region_1",
+    ("buttocks", 36): "D151--7-12--03152024.region_4",
+    ("buttocks", 82): "D149--7-12--04302024.region_5",
+}
+
+obs = merfish.obs
+keep = obs["run_region"].isin(regions.values()).to_numpy()
+
+meta = obs.loc[
+    keep,
+    ["run_region", "cell_type.broad", "cell_type.detailed"]
+].copy().reset_index(drop=True)
+
+coords = np.asarray(merfish.obsm["spatial"])[keep, :2]
+
+valid = ~meta["cell_type.detailed"].astype(str).isin(
+    ["Doublet", "Unknown"]
+)
+coords = coords[valid.to_numpy()]
+meta = meta.loc[valid].reset_index(drop=True)
+
+# Reuse previous UMAP colours if available
+types = sorted(meta["cell_type.broad"].dropna().unique())
+
+if "palette" not in globals() or not all(
+    t in palette for t in types
+):
+    cmap = plt.get_cmap("tab20", len(types))
+    palette = {t: cmap(i) for i, t in enumerate(types)}
+
+# Optional manual overrides after checking the figure
+# +1 = original Y direction; -1 = reverse Y direction
+manual_y = {}
+
+def orient_epidermis_up(xy, labels, region):
+    y = xy[:, 1].copy()
+
+    # Granular KC marks the superficial epidermis;
+    # fibroblasts mostly occupy the underlying dermis.
+    granular = y[labels == "Grn KC"]
+    fibro = y[labels == "Fibro"]
+
+    if len(granular) >= 10 and len(fibro) >= 10:
+        sign = (
+            1 if np.median(granular) > np.median(fibro)
+            else -1
+        )
+    else:
+        sign = 1
+        print("Please check orientation manually:", region)
+
+    sign = manual_y.get(region, sign)
+    xy_new = xy.copy()
+    xy_new[:, 1] *= sign
+
+    print(region, "| Y direction:", sign)
+    return xy_new
+
+fig, axes = plt.subplots(2, 2, figsize=(12, 11))
+
+layout = [
+    (0, 0, "inguinal fold", 36),
+    (0, 1, "inguinal fold", 82),
+    (1, 0, "buttocks", 36),
+    (1, 1, "buttocks", 82),
+]
+
+# Enable physical scale bars only after confirming
+
+# that one spatial coordinate unit equals one micrometre.
+spatial_unit_um = None
+
+for r, c, site, age in layout:
+    ax = axes[r, c]
+    region = regions[(site, age)]
+
+    m = (meta["run_region"] == region).to_numpy()
+    xy = coords[m]
+    labels = meta.loc[m, "cell_type.broad"].astype(str).to_numpy()
+
+    xy = orient_epidermis_up(xy, labels, region)
+
+    for ct in types:
+        cm = labels == ct
+        ax.scatter(
+            xy[cm, 0], xy[cm, 1],
+            s=2.1,
+            color=palette[ct],
+            alpha=0.85,
+            linewidths=0,
+            rasterized=True
+        )
+
+    ax.set_title(
+        f"{'Inguinal fold' if site == 'inguinal fold' else 'Buttocks'}"
+        f" | {age}y\n(n={len(xy):,} cells)",
+        fontsize=13, pad=10
+    )
+
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    # Add 1 mm scale bar only after unit confirmation
+    if spatial_unit_um is not None:
+        length = 1000 / spatial_unit_um
+
+        xmin, xmax = xy[:, 0].min(), xy[:, 0].max()
+        ymin, ymax = xy[:, 1].min(), xy[:, 1].max()
+        width, height = xmax-xmin, ymax-ymin
+
+        bx = xmin + 0.07*width
+        by = ymin - 0.10*height
+
+        ax.plot(
+            [bx, bx+length], [by, by],
+            color="black", lw=3.5, clip_on=False
+        )
+        ax.text(
+            bx+length/2, by+0.025*height,
+            "1 mm", ha="center", va="bottom",
+            fontsize=10
+        )
+
+handles = [
+    Line2D(
+        [0], [0], marker="o", linestyle="",
+        markerfacecolor=palette[t],
+        markeredgecolor="none",
+        markersize=7, label=t
+    )
+    for t in types
+]
+
+fig.legend(
+    handles=handles,
+    loc="center left",
+    bbox_to_anchor=(0.83, 0.5),
+    frameon=False, fontsize=9
+)
+
+fig.suptitle(
+    "MERFISH | Human skin spatial cell atlas",
+    fontsize=16, y=0.98
+)
+
+fig.subplots_adjust(
+    left=0.04, right=0.80,
+    top=0.91, bottom=0.05,
+    wspace=0.15, hspace=0.16
+)
+
+png = outdir / "Fig1D_MERFISH_Spatial_Oriented_FINAL.png"
+pdf = outdir / "Fig1D_MERFISH_Spatial_Oriented_FINAL.pdf"
+
+fig.savefig(png, dpi=450, bbox_inches="tight",
+            facecolor="white")
+fig.savefig(pdf, bbox_inches="tight",
+            facecolor="white")
+plt.show()
+
+print("Saved:", png)
+print("Saved:", pdf)
+
+    
