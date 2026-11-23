@@ -1,0 +1,279 @@
+import scanpy as sc
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+
+fib = sc.read_h5ad(
+    root / "Integrated_8Donor_Skin" /
+    "Fibroblast_8Donors_Clustered.h5ad"
+)
+
+marker_groups = {
+    "Fibroblast identity": [
+        "DCN", "LUM", "COL1A1", "COL3A1"
+    ],
+    "Papillary-like": [
+        "APCDD1", "COL18A1", "WIF1", "C7"
+    ],
+    "Reticular / ECM": [
+        "POSTN", "MFAP5", "FBLN5", "MGP"
+    ],
+    "Perivascular": [
+        "RGS5", "PDGFRB", "ACTA2", "TAGLN"
+    ],
+    "Inflammatory": [
+        "CXCL1", "CXCL2", "CXCL8", "CCL2", "IL6"
+    ],
+    "Cycling": [
+        "MKI67", "TOP2A", "UBE2C"
+    ]
+}
+
+# Filter genes not present in the dataset
+markers = {
+    name: [g for g in genes if g in fib.var_names]
+    for name, genes in marker_groups.items()
+}
+
+markers = {k: v for k, v in markers.items() if v}
+
+print("Available marker genes:")
+print(markers)
+
+# Plot marker expression across clusters
+dp = sc.pl.dotplot(
+    fib,
+    var_names=markers,
+    groupby="fib_cluster",
+    standard_scale="var",
+    dendrogram=False,
+    show=False,
+    return_fig=True
+)
+
+dp.style(
+    cmap="Reds",
+    dot_edge_color="white",
+    dot_edge_lw=0.2,
+    largest_dot=170
+)
+
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+dp.savefig(
+    outdir / "Fig2D_Fibroblast_Marker_Dotplot.png"
+)
+
+dp.savefig(
+    outdir / "Fig2D_Fibroblast_Marker_Dotplot.pdf"
+)
+
+print("Figure 2D saved.")
+
+
+import scanpy as sc
+import pandas as pd
+
+# fib 已经加载
+sc.tl.rank_genes_groups(
+    fib,
+    groupby="fib_cluster",
+    method="wilcoxon",
+    reference="rest",
+    use_raw=False,
+    n_genes=30
+)
+
+top_markers = []
+
+for cluster in sorted(
+    fib.obs["fib_cluster"].astype(str).unique(),
+    key=int
+):
+    df = sc.get.rank_genes_groups_df(
+        fib,
+        group=cluster
+    )
+
+    df = df[
+        (df["logfoldchanges"] > 0.25) &
+        (df["pvals_adj"] < 0.05)
+    ].head(10)
+
+    df["cluster"] = cluster
+    top_markers.append(df)
+
+marker_table = pd.concat(
+    top_markers,
+    ignore_index=True
+)
+
+display(
+    marker_table[
+        ["cluster", "names", "logfoldchanges", "pvals_adj"]
+    ]
+)
+
+
+
+
+
+import pandas as pd
+
+# 每个cluster的前10个marker放在一行
+marker_summary = (
+    marker_table
+    .groupby("cluster")["names"]
+    .apply(lambda x: ", ".join(x))
+    .reset_index()
+)
+
+marker_summary.columns = [
+    "Fibroblast cluster",
+    "Top 10 marker genes"
+]
+
+pd.set_option("display.max_colwidth", None)
+display(marker_summary)
+
+
+import scanpy as sc
+
+qc_genes = {
+    "Fibroblast": [
+        "DCN", "LUM", "COL1A1",
+        "COL3A1", "PDGFRA"
+    ],
+    "Epithelial": [
+        "KRT5", "KRT14", "KRT1",
+        "KRT10", "KRT17", "EPCAM"
+    ],
+    "Immune": [
+        "PTPRC", "LST1", "TYROBP"
+    ],
+    "Stress / inflammatory": [
+        "CXCL8", "CXCL2", "SOD2",
+        "SFN", "S100A14"
+    ]
+}
+
+qc_genes = {
+    k: [g for g in v if g in fib.var_names]
+    for k, v in qc_genes.items()
+}
+
+qc_genes = {k: v for k, v in qc_genes.items() if v}
+
+sc.pl.dotplot(
+    fib,
+    var_names=qc_genes,
+    groupby="fib_cluster",
+    standard_scale="var",
+    cmap="Reds",
+    show=True
+)
+
+
+
+import scanpy as sc
+
+qc_markers = {
+    "Fibroblast": [
+        "DCN", "LUM", "COL1A1",
+        "COL1A2", "PDGFRA"
+    ],
+    "Keratinocyte": [
+        "KRT5", "KRT14", "KRT17",
+        "KRT10", "EPCAM", "SFN"
+    ],
+    "Immune / APC": [
+        "PTPRC", "CD74", "HLA-DRA",
+        "LST1", "TYROBP"
+    ],
+    "Inflammatory": [
+        "CXCL8", "CXCL2",
+        "CCL2", "NFKBIA"
+    ]
+}
+
+qc_markers = {
+    k: [g for g in v if g in fib.var_names]
+    for k, v in qc_markers.items()
+}
+
+qc_markers = {k: v for k, v in qc_markers.items() if v}
+
+sc.pl.dotplot(
+    fib,
+    var_names=qc_markers,
+    groupby="fib_cluster",
+    standard_scale="var",
+    cmap="Reds",
+    show=True
+)
+
+
+
+
+
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+
+# Keep clusters 0–7; flag cluster 8 for separate QC
+fib_clean = fib[
+    fib.obs["fib_cluster"].astype(str) != "8"
+].copy()
+
+print("Before QC:", fib.n_obs)
+print("After excluding cluster 8:", fib_clean.n_obs)
+
+out = (
+    root / "Integrated_8Donor_Skin" /
+    "Fibroblast_8Donors_QCfiltered.h5ad"
+)
+
+fib_clean.write_h5ad(out)
+
+print("Saved:", out)
+
+
+
+import scanpy as sc
+
+# 使用新保存的QC版本
+fib_clean = sc.read_h5ad(
+    "/home/ecs-user/skin_spatial_project/"
+    "Integrated_8Donor_Skin/"
+    "Fibroblast_8Donors_QCfiltered.h5ad"
+)
+
+print("QC-filtered fibroblasts:", fib_clean.shape)
+print("Remaining clusters:")
+print(fib_clean.obs["fib_cluster"].value_counts().sort_index())
+
+# 沿用之前的markers字典
+dp = sc.pl.dotplot(
+    fib_clean,
+    var_names=markers,
+    groupby="fib_cluster",
+    standard_scale="var",
+    dendrogram=False,
+    show=False,
+    return_fig=True
+)
+
+dp.style(cmap="Reds", dot_edge_color="white")
+
+dp.savefig(
+    "/home/ecs-user/skin_spatial_project/"
+    "Integrated_8Donor_Skin/figures/"
+    "Fig2D_Fibroblast_Annotated_Markers_QCfiltered.png"
+)
+
+
+
+
+
