@@ -1,0 +1,289 @@
+# 统一细胞类型标签
+sole.obs["unified_broad"] = (
+    sole.obs["cell_type.broad"].astype(str)
+)
+
+butt.obs["unified_broad"] = (
+    butt.obs["predicted_broad"].astype(str)
+)
+
+# 统一数据来源
+sole.obs["cohort"] = "SoleBoldo_2020"
+butt.obs["cohort"] = "GSE274955"
+
+# 统一供体名称
+sole.obs["unified_donor"] = (
+    sole.obs["donor_id"].astype(str)
+)
+butt.obs["unified_donor"] = (
+    butt.obs["sample_id"].astype(str)
+)
+
+# 合并
+combined = ad.concat(
+    {
+        "SoleBoldo": sole,
+        "Buttock": butt
+    },
+    join="inner",
+    label="dataset",
+    index_unique="-"
+)
+
+print("Combined:", combined.shape)
+
+print("\nDonors:")
+display(
+    combined.obs.groupby(
+        ["dataset", "unified_donor"],
+        observed=True
+    ).size()
+)
+
+out = root / "Integrated_8Donor_Skin"
+out.mkdir(exist_ok=True)
+
+combined.write_h5ad(
+    out / "Human_Skin_8Donors_rawcounts.h5ad",
+    compression="gzip"
+)
+
+print("Saved combined dataset!")from pathlib import Path
+
+out = Path(
+    "/home/ecs-user/skin_spatial_project/"
+    "Integrated_8Donor_Skin"
+)
+out.mkdir(parents=True, exist_ok=True)
+
+combined.write_h5ad(
+    out / "Human_Skin_8Donors_rawcounts.h5ad",
+    compression="gzip"
+)
+
+print("Saved successfully!")
+print("Shape:", combined.shape)
+
+
+import scanpy as sc
+
+combined = sc.read_h5ad(
+    "/home/ecs-user/skin_spatial_project/"
+    "Integrated_8Donor_Skin/"
+    "Human_Skin_8Donors_rawcounts.h5ad"
+)
+
+from scipy import sparse
+import pandas as pd
+
+print("Sparse matrix:", sparse.issparse(combined.X))
+print("Matrix type:", type(combined.X))
+
+print("\nCell types:")
+display(combined.obs["unified_broad"].value_counts())
+
+print("\nMetadata columns:")
+print(combined.obs.columns.tolist())
+
+
+import pandas as pd
+
+# 根据已知供体信息建立核对表
+donor_info = {
+    "LS_S1": (25, "inguinal fold"),
+    "LS_S2": (27, "inguinal fold"),
+    "LS_S3": (53, "inguinal fold"),
+    "LS_S4": (70, "inguinal fold"),
+    "LS_S5": (69, "inguinal fold"),
+    "Butt_23": (23, "buttock"),
+    "Butt_53": (53, "buttock"),
+    "Butt_85": (85, "buttock")
+}
+
+# 创建独立、标准化的年龄与部位字段
+combined.obs["age_years"] = pd.to_numeric(
+    combined.obs["unified_donor"].astype(str).map(
+        {k: v[0] for k, v in donor_info.items()}
+    ),
+    errors="coerce"
+)
+
+combined.obs["skin_site"] = (
+    combined.obs["unified_donor"].astype(str).map(
+        {k: v[1] for k, v in donor_info.items()}
+    )
+)
+
+# 检查是否有未匹配的供体
+assert combined.obs["age_years"].notna().all()
+assert combined.obs["skin_site"].notna().all()
+
+donor_summary = (
+    combined.obs.groupby(
+        ["cohort", "unified_donor",
+         "age_years", "skin_site"],
+        observed=True
+    )
+    .size()
+    .reset_index(name="n_cells")
+    .sort_values("age_years")
+)
+
+display(donor_summary)
+
+from scipy import sparse
+import numpy as np
+
+X = combined.X
+
+print("Sparse:", sparse.issparse(X))
+print("Minimum count:", X.data.min())
+print("Maximum count:", X.data.max())
+print("Non-integer values:",
+      np.sum(~np.isclose(X.data, np.rint(X.data))))
+
+
+from pathlib import Path
+
+out = Path(
+    "/home/ecs-user/skin_spatial_project/"
+    "Integrated_8Donor_Skin"
+)
+out.mkdir(parents=True, exist_ok=True)
+
+combined.write_h5ad(
+    out / "Human_Skin_8Donors_rawcounts.h5ad",
+    compression="gzip"
+)
+
+print("Saved with age and skin-site metadata!")
+
+
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# 以每位供体为统计单位
+composition = pd.crosstab(
+    combined.obs["unified_donor"],
+    combined.obs["unified_broad"]
+)
+
+composition_pct = (
+    composition.div(composition.sum(axis=1), axis=0)
+    * 100
+)
+
+# 根据年龄排序
+donor_order = (
+    donor_summary.sort_values("age_years")
+    ["unified_donor"].tolist()
+)
+
+composition_pct = composition_pct.loc[donor_order]
+
+# 绘图
+fig, ax = plt.subplots(figsize=(13, 6))
+
+composition_pct.plot(
+    kind="bar",
+    stacked=True,
+    ax=ax,
+    width=0.8,
+    colormap="tab20"
+)
+
+ax.set_xlabel("Donor (ascending age)")
+ax.set_ylabel("Cell composition (%)")
+ax.set_title(
+    "Figure 1A | Cell composition across 8 human skin donors"
+)
+ax.legend(
+    title="Cell type",
+    bbox_to_anchor=(1.02, 1),
+    loc="upper left",
+    frameon=False
+)
+
+age_map = donor_summary.set_index(
+    "unified_donor"
+)["age_years"]
+
+ax.set_xticklabels(
+    [f"{d}\n{age_map[d]}y" for d in donor_order],
+    rotation=0
+)
+
+plt.tight_layout()
+
+fig.savefig(
+    out / "Fig1A_8Donors_Cell_Composition.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.show()
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# 以每位供体为统计单位
+composition = pd.crosstab(
+    combined.obs["unified_donor"],
+    combined.obs["unified_broad"]
+)
+
+composition_pct = (
+    composition.div(composition.sum(axis=1), axis=0)
+    * 100
+)
+
+# 根据年龄排序
+donor_order = (
+    donor_summary.sort_values("age_years")
+    ["unified_donor"].tolist()
+)
+
+composition_pct = composition_pct.loc[donor_order]
+
+# 绘图
+fig, ax = plt.subplots(figsize=(13, 6))
+
+composition_pct.plot(
+    kind="bar",
+    stacked=True,
+    ax=ax,
+    width=0.8,
+    colormap="tab20"
+)
+
+ax.set_xlabel("Donor (ascending age)")
+ax.set_ylabel("Cell composition (%)")
+ax.set_title(
+    "Figure 1A | Cell composition across 8 human skin donors"
+)
+ax.legend(
+    title="Cell type",
+    bbox_to_anchor=(1.02, 1),
+    loc="upper left",
+    frameon=False
+)
+
+age_map = donor_summary.set_index(
+    "unified_donor"
+)["age_years"]
+
+ax.set_xticklabels(
+    [f"{d}\n{age_map[d]}y" for d in donor_order],
+    rotation=0
+)
+
+plt.tight_layout()
+
+fig.savefig(
+    out / "Fig1A_8Donors_Cell_Composition.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.show()
