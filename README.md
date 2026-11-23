@@ -30,6 +30,10 @@ The current analyses are exploratory. Cohort and anatomical-site differences, li
 ## Figures
 
 ### Figure 1. Human skin single-cell and spatial transcriptomic atlas
+[View Figure 1 (PDF)](figures/Figure_1_Human_Skin_Atlas.pdf)
 
+This figure presents the datasets, MERFISH spatial maps,
+cell-type UMAPs, and cross-platform transcriptional
+similarity analysis.
 
 
