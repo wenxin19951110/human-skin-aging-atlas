@@ -1,0 +1,95 @@
+
+import scanpy as sc
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+# 载入 QC-filtered fibroblast dataset
+fib_clean = sc.read_h5ad(
+    root / "Integrated_8Donor_Skin" /
+    "Fibroblast_8Donors_QCfiltered.h5ad"
+)
+
+# Provisional annotations
+annotation_map = {
+    "0": "0 | Inflammatory/stress",
+    "1": "1 | CXCL12+/APOE+",
+    "2": "2 | SFRP1+/APOD+",
+    "3": "3 | Matrix-rich",
+    "4": "4 | Immediate-early",
+    "5": "5 | ECM-remodelling",
+    "6": "6 | Papillary-like candidate",
+    "7": "7 | CFD+/SLPI+"
+}
+
+fib_clean.obs["fib_annotation"] = (
+    fib_clean.obs["fib_cluster"]
+    .astype(str)
+    .map(annotation_map)
+)
+
+# Preserve cluster order
+annotation_order = list(annotation_map.values())
+
+fib_clean.obs["fib_annotation"] = (
+    fib_clean.obs["fib_annotation"]
+    .astype("category")
+    .cat.set_categories(
+        annotation_order,
+        ordered=True
+    )
+)
+
+# Check labels
+print(fib_clean.obs["fib_annotation"].value_counts())
+
+# Draw annotated UMAP
+fig = sc.pl.umap(
+    fib_clean,
+    color="fib_annotation",
+    title="Fibroblast transcriptional states",
+    legend_loc="right margin",
+    frameon=False,
+    size=12,
+    show=False,
+    return_fig=True
+)
+
+fig.set_size_inches(11, 7)
+
+png = outdir / "Fig2C_Fibroblast_Annotated_UMAP.png"
+pdf = outdir / "Fig2C_Fibroblast_Annotated_UMAP.pdf"
+
+fig.savefig(
+    png, dpi=450,
+    bbox_inches="tight",
+    facecolor="white"
+)
+fig.savefig(
+    pdf,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+plt.show()
+
+print("Saved:", png)
+print("Saved:", pdf)
+
+
+fig = sc.pl.umap(
+    fib_clean,
+    color="fib_annotation",
+    title="Fibroblast transcriptional states",
+    legend_loc="on data",
+    legend_fontsize=9,
+    legend_fontoutline=2,
+    frameon=False,
+    size=12,
+    show=False,
+    return_fig=True
+)
+
