@@ -26,3 +26,10 @@ This self-directed project uses Python, Scanpy, Pandas, and Matplotlib, with AI-
 ### Limitations
 
 The current analyses are exploratory. Cohort and anatomical-site differences, limited donor numbers and targeted MERFISH gene coverage constrain age-related interpretation.
+
+## Figures
+
+### Figure 1. Human skin single-cell and spatial transcriptomic atlas
+
+
+
