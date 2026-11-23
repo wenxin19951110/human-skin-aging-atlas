@@ -1,0 +1,248 @@
+from pathlib import Path
+
+out = Path(
+    "/home/ecs-user/skin_spatial_project/"
+    "Integrated_8Donor_Skin"
+)
+out.mkdir(parents=True, exist_ok=True)
+
+combined.write_h5ad(
+    out / "Human_Skin_8Donors_rawcounts.h5ad",
+    compression="gzip"
+)
+
+print("Saved with age and skin-site metadata!")
+
+
+
+import numpy as np
+import pandas as pd
+
+# 主要展示用三年龄组
+combined.obs["age_group3"] = pd.cut(
+    combined.obs["age_years"],
+    bins=[0, 39, 54, np.inf],
+    labels=["Young", "Middle", "Old"],
+    right=True
+)
+
+# 与MERFISH一致的55岁分界
+combined.obs["age_group55"] = pd.Categorical(
+    np.where(
+        combined.obs["age_years"] >= 55,
+        "Old", "Young"
+    ),
+    categories=["Young", "Old"],
+    ordered=True
+)
+
+# 只比较两端年龄段
+combined.obs["extreme_age_group"] = pd.Categorical(
+    np.select(
+        [
+            combined.obs["age_years"] <= 39,
+            combined.obs["age_years"] >= 55
+        ],
+        ["Young", "Old"],
+        default="Middle"
+    ),
+    categories=["Young", "Middle", "Old"],
+    ordered=True
+)
+
+# 每位供体汇总一次，避免误把细胞当成独立供体
+donor_groups = (
+    combined.obs[
+        ["unified_donor", "cohort",
+         "age_years", "age_group3",
+         "age_group55", "extreme_age_group"]
+    ]
+    .drop_duplicates(subset=["unified_donor"])
+    .sort_values("age_years")
+)
+
+display(donor_groups)
+
+
+combined.write_h5ad(
+    out / "Human_Skin_8Donors_rawcounts.h5ad",
+    compression="gzip"
+)
+
+
+# 统一主要年龄分组
+combined.obs["age_group"] = (
+    combined.obs["age_group55"].copy()
+)
+
+# 检查每组独立供体数量
+donor_groups = (
+    combined.obs[
+        ["unified_donor", "cohort", "age_years", "age_group"]
+    ]
+    .drop_duplicates(subset=["unified_donor"])
+)
+
+print("Independent donors per age group:")
+print(donor_groups["age_group"].value_counts())
+
+display(donor_groups.sort_values("age_years"))
+
+
+
+import scanpy as sc
+import numpy as np
+
+# 建立分析副本，保留 combined 原始 counts
+atlas = combined.copy()
+
+print("Input:", atlas.shape)
+
+# 标准化与log转换
+sc.pp.normalize_total(atlas, target_sum=1e4)
+sc.pp.log1p(atlas)
+
+# 高变基因选择
+sc.pp.highly_variable_genes(
+    atlas,
+    n_top_genes=3000,
+    flavor="seurat",
+    batch_key="cohort"
+)
+
+print("Highly variable genes:",
+      atlas.var["highly_variable"].sum())
+
+# PCA：仅使用高变基因
+sc.pp.pca(
+    atlas,
+    n_comps=50,
+    mask_var="highly_variable",
+    zero_center=False
+)
+
+# 建立邻接图
+sc.pp.neighbors(
+    atlas,
+    n_neighbors=15,
+    n_pcs=30
+)
+
+# UMAP
+sc.tl.umap(atlas, random_state=42)
+
+print("UMAP completed!")
+
+
+
+
+import matplotlib.pyplot as plt
+
+sc.pl.umap(
+    atlas,
+    color=[
+        "cohort",
+        "unified_broad",
+        "age_group"
+    ],
+    wspace=0.35,
+    frameon=False,
+    size=5,
+    show=True
+)
+
+
+
+from pathlib import Path
+
+output = (
+    out / "Human_Skin_8Donors_Uncorrected_UMAP.h5ad"
+)
+
+atlas.write_h5ad(
+    output,
+    compression="gzip"
+)
+
+print("Saved:", output)
+
+import harmonypy as hm
+import numpy as np
+
+# 原始PCA
+X_pca = np.asarray(
+    atlas.obsm["X_pca"],
+    dtype=np.float64
+)
+
+print("Original PCA:", X_pca.shape)
+
+# 直接运行Harmony
+ho = hm.run_harmony(
+    X_pca,
+    atlas.obs,
+    vars_use=["cohort"],
+    max_iter_harmony=20,
+    verbose=False
+)
+
+# 读取校正结果
+Z = np.asarray(ho.Z_corr)
+
+print("Harmony raw output:", Z.shape)
+
+# 自动检查矩阵方向
+n_cells, n_pcs = X_pca.shape
+
+if Z.shape == (n_cells, n_pcs):
+    X_harmony = Z
+elif Z.shape == (n_pcs, n_cells):
+    X_harmony = Z.T
+else:
+    raise ValueError(
+        f"Unexpected Harmony shape: {Z.shape}"
+    )
+
+# 保存到AnnData
+atlas.obsm["X_pca_harmony"] = (
+    X_harmony.astype(np.float32)
+)
+
+print(
+    "Corrected PCA:",
+    atlas.obsm["X_pca_harmony"].shape
+)
+
+import scanpy as sc
+
+sc.pp.neighbors(
+    atlas,
+    use_rep="X_pca_harmony",
+    n_neighbors=15
+)
+
+sc.tl.umap(
+    atlas,
+    random_state=42
+)
+
+sc.pl.umap(
+    atlas,
+    color=[
+        "cohort",
+        "unified_broad",
+        "age_group"
+    ],
+    wspace=0.4,
+    frameon=False,
+    size=5
+)
+
+
+
+
+
+
+
+
+
