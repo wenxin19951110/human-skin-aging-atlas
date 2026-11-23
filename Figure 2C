@@ -1,25 +1,72 @@
 
 import scanpy as sc
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
 
-sc.pp.neighbors(
-    atlas,
-    use_rep="X_pca_harmony",
-    n_neighbors=15
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+fib = sc.read_h5ad(
+    root / "Integrated_8Donor_Skin" /
+    "Fibroblast_8Donors_Clustered.h5ad"
 )
 
-sc.tl.umap(
-    atlas,
-    random_state=42
-)
+print("Fibroblast data:", fib.shape)
+print("Embeddings:", list(fib.obsm.keys()))
 
-sc.pl.umap(
-    atlas,
-    color=[
-        "cohort",
-        "unified_broad",
-        "age_group"
-    ],
-    wspace=0.4,
+print("\nCluster sizes:")
+print(fib.obs["fib_cluster"].value_counts().sort_index())
+
+print("\nAvailable metadata:")
+print(fib.obs.columns.tolist())
+
+
+
+import matplotlib.pyplot as plt
+
+plt.close("all")
+
+fig = sc.pl.umap(
+    fib,
+    color=["fib_cluster", "cohort", "age_group"],
+    ncols=3,
+    wspace=0.35,
     frameon=False,
-    size=5
+    size=7,
+    show=False,
+    return_fig=True,
+    title=[
+        "Fibroblast clusters",
+        "Dataset",
+        "Age group"
+    ]
 )
+
+fig.set_size_inches(17, 5.5)
+
+png = outdir / "Fig2A_Fibroblast_UMAP_FINAL.png"
+pdf = outdir / "Fig2A_Fibroblast_UMAP_FINAL.pdf"
+
+fig.savefig(
+    png,
+    dpi=450,
+    bbox_inches="tight",
+    facecolor="white"
+)
+fig.savefig(
+    pdf,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+plt.show()
+
+print("Saved:", png)
+print("PNG size:", round(png.stat().st_size / 1024, 1), "KB")
+print("Saved:", pdf)
+
+
+
