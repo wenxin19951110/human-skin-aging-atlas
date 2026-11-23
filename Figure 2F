@@ -1,0 +1,802 @@
+from pathlib import Path
+import matplotlib.pyplot as plt
+
+fig.set_size_inches(10, 7)
+
+outdir = Path(
+    "/home/ecs-user/skin_spatial_project/"
+    "Integrated_8Donor_Skin/figures"
+)
+outdir.mkdir(parents=True, exist_ok=True)
+
+png = outdir / "Fig2D_Fibroblast_UMAP_OnData_Labels.png"
+pdf = outdir / "Fig2D_Fibroblast_UMAP_OnData_Labels.pdf"
+
+# 保存带有文字注释的高清版本
+fig.savefig(png, dpi=450, bbox_inches="tight",
+            facecolor="white")
+
+fig.savefig(pdf, bbox_inches="tight",
+            facecolor="white")
+
+plt.show()
+
+print("PNG saved:", png)
+print("PDF saved:", pdf)
+print("PNG size:", round(png.stat().st_size / 1024, 1), "KB")
+
+
+
+import pandas as pd
+
+# Check donor information and age groups
+donor_info = (
+    fib_clean.obs
+    .groupby(
+        ["cohort", "donor_id", "age_group"],
+        observed=True
+    )
+    .size()
+    .reset_index(name="n_fibroblasts")
+)
+
+display(donor_info)
+
+print("\nAge groups:")
+print(fib_clean.obs["age_group"].value_counts())
+
+print("\nExpression data:")
+print("X shape:", fib_clean.X.shape)
+print("Layers:", list(fib_clean.layers.keys()))
+print("Raw available:", fib_clean.raw is not None)
+
+print("\nDonor x cluster composition:")
+display(
+    pd.crosstab(
+        fib_clean.obs["donor_id"],
+        fib_clean.obs["fib_cluster"]
+    )
+)
+
+
+
+import numpy as np
+import pandas as pd
+from scipy import sparse
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+# 主分析排除细胞数过少的 LS_S3
+adata_de = fib_clean[
+    fib_clean.obs["donor_id"].astype(str) != "LS_S3"
+].copy()
+
+print("Cells used:", adata_de.n_obs)
+print("Donors used:", adata_de.obs["donor_id"].nunique())
+
+# 1. Donor-level mean expression
+records = []
+
+for donor in adata_de.obs["donor_id"].unique():
+    sub = adata_de[
+        adata_de.obs["donor_id"] == donor
+    ]
+
+    X = sub.X
+    mean_expr = np.asarray(X.mean(axis=0)).ravel()
+
+    info = sub.obs.iloc[0]
+
+    record = pd.Series(
+        mean_expr,
+        index=adata_de.var_names,
+        name=donor
+    )
+
+    records.append(record)
+
+donor_expr = pd.DataFrame(records)
+donor_expr.index.name = "donor_id"
+
+metadata = (
+    adata_de.obs[
+        ["donor_id", "cohort", "age_group"]
+    ]
+    .drop_duplicates("donor_id")
+    .set_index("donor_id")
+    .loc[donor_expr.index]
+)
+
+display(metadata)
+
+# 2. Each cohort: Old minus Young
+cohort_effects = {}
+
+for cohort in metadata["cohort"].unique():
+
+    idx = metadata["cohort"] == cohort
+
+    young_ids = metadata.index[
+        idx & (metadata["age_group"] == "Young")
+    ]
+
+    old_ids = metadata.index[
+        idx & (metadata["age_group"] == "Old")
+    ]
+
+    young_mean = donor_expr.loc[young_ids].mean()
+    old_mean = donor_expr.loc[old_ids].mean()
+
+    cohort_effects[cohort] = old_mean - young_mean
+
+effects = pd.DataFrame(cohort_effects)
+
+# 3. Cross-cohort consistency
+effects["mean_delta"] = effects.mean(axis=1)
+
+effects["same_direction"] = (
+    (effects.iloc[:, 0] > 0) &
+    (effects.iloc[:, 1] > 0)
+) | (
+    (effects.iloc[:, 0] < 0) &
+    (effects.iloc[:, 1] < 0)
+)
+
+# Mean expression filter, exploratory only
+effects["mean_expression"] = donor_expr.mean(axis=0)
+
+candidates = effects[
+    (effects["same_direction"]) &
+    (effects["mean_expression"] > 0.05)
+].copy()
+
+# Rank by the smaller absolute cohort effect
+# Avoid ranking genes driven only by one cohort
+cohort_cols = list(cohort_effects.keys())
+
+candidates["min_abs_delta"] = (
+    candidates[cohort_cols].abs().min(axis=1)
+)
+
+candidates = candidates.sort_values(
+    "min_abs_delta",
+    ascending=False
+)
+
+print("Consistent-direction candidates:",
+      len(candidates))
+
+display(candidates.head(30).round(3))
+
+# Save complete tables
+effects.to_csv(
+    outdir / "Fibroblast_Age_Cohort_Effects_AllGenes.csv"
+)
+
+candidates.to_csv(
+    outdir / "Fibroblast_Age_Consistent_Candidates.csv"
+)
+
+donor_expr.to_csv(
+    outdir / "Fibroblast_DonorMean_Expression.csv"
+)
+
+print("Saved exploratory age comparison tables.")
+
+
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.colors import TwoSlopeNorm, ListedColormap
+from matplotlib.patches import Patch
+from pathlib import Path
+
+# =====================================================
+# 1. Output directory
+# =====================================================
+
+root = Path("/home/ecs-user/skin_spatial_project")
+
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+
+# =====================================================
+# 2. Donor metadata and actual ages
+# =====================================================
+
+age_map = {
+    "Butt_23": 23,
+    "LS_S1": 25,
+    "LS_S2": 27,
+    "Butt_53": 53,
+    "LS_S5": 69,
+    "LS_S4": 70,
+    "Butt_85": 85
+}
+
+meta = metadata.copy()
+
+meta["age_numeric"] = meta.index.map(age_map)
+
+assert meta["age_numeric"].notna().all(), \
+    "Some donor ages are missing!"
+
+donor_order = (
+    meta.sort_values("age_numeric").index.tolist()
+)
+
+meta = meta.loc[donor_order]
+
+print("Donors sorted by age:")
+for donor in donor_order:
+    print(donor, int(meta.loc[donor, "age_numeric"]))
+
+
+# =====================================================
+# 3. Select Top 30 candidate genes
+# =====================================================
+
+# candidates was generated in our previous analysis
+# using consistent Old-vs-Young directions in both cohorts
+
+genes_df = candidates.copy()
+
+genes_df = genes_df[
+    genes_df["same_direction"]
+].copy()
+
+# Rank using the smaller absolute change across cohorts
+genes_df = genes_df.sort_values(
+    "min_abs_delta",
+    ascending=False
+)
+
+# Number of genes displayed
+TOP_N = 30
+
+genes_all = [
+    g for g in genes_df.index
+    if g in donor_expr.columns
+][:TOP_N]
+
+print("\nNumber of genes:", len(genes_all))
+print("Selected genes:", genes_all)
+
+
+# =====================================================
+# 4. Donor-level expression
+# =====================================================
+
+# Rows: genes
+# Columns: donors
+
+expr = donor_expr.loc[donor_order, genes_all].T
+
+# Gene-wise Z-score across donors
+row_mean = expr.mean(axis=1)
+row_std = expr.std(axis=1, ddof=0).replace(0, 1)
+
+z = expr.sub(row_mean, axis=0).div(row_std, axis=0)
+
+z = z.fillna(0)
+
+print("\nHeatmap dimensions:", z.shape)
+
+
+# =====================================================
+# 5. Define annotation colors
+# =====================================================
+
+age_colors = {
+    "Young": "#4C78A8",
+    "Old": "#E08B58"
+}
+
+cohort_colors = {
+    "SoleBoldo_2020": "#8C79AD",
+    "GSE274955": "#67A78D"
+}
+
+age_vals = [
+    0 if meta.loc[d, "age_group"] == "Young" else 1
+    for d in donor_order
+]
+
+cohort_vals = [
+    0 if meta.loc[d, "cohort"] == "SoleBoldo_2020" else 1
+    for d in donor_order
+]
+
+
+# =====================================================
+# 6. Figure layout
+# =====================================================
+
+n_genes = len(genes_all)
+
+fig_height = max(8, n_genes * 0.31 + 2)
+
+fig = plt.figure(
+    figsize=(10.5, fig_height),
+    facecolor="white"
+)
+
+gs = fig.add_gridspec(
+    3, 2,
+    height_ratios=[0.15, 0.15, n_genes * 0.34],
+    width_ratios=[24, 1],
+    hspace=0.035,
+    wspace=0.22,
+    left=0.20,
+    right=0.88,
+    top=0.88,
+    bottom=0.08
+)
+
+ax_age = fig.add_subplot(gs[0, 0])
+ax_cohort = fig.add_subplot(gs[1, 0])
+ax = fig.add_subplot(gs[2, 0])
+cax = fig.add_subplot(gs[2, 1])
+
+
+# =====================================================
+# 7. Draw expression heatmap
+# =====================================================
+
+im = ax.imshow(
+    z.values,
+    cmap="RdBu_r",
+    norm=TwoSlopeNorm(
+        vmin=-2,
+        vcenter=0,
+        vmax=2
+    ),
+    aspect="auto",
+    interpolation="nearest"
+)
+
+ax.set_xticks(range(len(donor_order)))
+
+ax.set_xticklabels(
+    [
+        f"{d}\n({int(meta.loc[d, 'age_numeric'])}y)"
+        for d in donor_order
+    ],
+    fontsize=10
+)
+
+# Keep donor labels at bottom to avoid overlap
+# with annotation strips
+ax.xaxis.tick_bottom()
+
+ax.tick_params(
+    axis="x",
+    length=0,
+    pad=10
+)
+
+ax.set_yticks(range(n_genes))
+ax.set_yticklabels(
+    genes_all,
+    fontsize=10
+)
+
+ax.tick_params(
+    axis="y",
+    length=0,
+    pad=7
+)
+
+# Light boundaries between genes and donors
+ax.set_xticks(
+    np.arange(-0.5, len(donor_order), 1),
+    minor=True
+)
+
+ax.set_yticks(
+    np.arange(-0.5, n_genes, 1),
+    minor=True
+)
+
+ax.grid(
+    which="minor",
+    color="white",
+    linewidth=0.8
+)
+
+ax.tick_params(
+    which="minor",
+    bottom=False,
+    left=False
+)
+
+for spine in ax.spines.values():
+    spine.set_visible(False)
+
+ax.set_xlabel(
+    "Human skin donors (ordered by age)",
+    fontsize=11,
+    labelpad=12
+)
+
+
+# =====================================================
+# 8. Draw age annotation strip
+# =====================================================
+
+ax_age.imshow(
+    [age_vals],
+    cmap=ListedColormap([
+        age_colors["Young"],
+        age_colors["Old"]
+    ]),
+    aspect="auto",
+    vmin=0,
+    vmax=1
+)
+
+ax_age.set_ylabel(
+    "Age",
+    rotation=0,
+    fontsize=10,
+    labelpad=30,
+    va="center"
+)
+
+
+# =====================================================
+# 9. Draw cohort annotation strip
+# =====================================================
+
+ax_cohort.imshow(
+    [cohort_vals],
+    cmap=ListedColormap([
+        cohort_colors["SoleBoldo_2020"],
+        cohort_colors["GSE274955"]
+    ]),
+    aspect="auto",
+    vmin=0,
+    vmax=1
+)
+
+ax_cohort.set_ylabel(
+    "Cohort",
+    rotation=0,
+    fontsize=10,
+    labelpad=30,
+    va="center"
+)
+
+for annotation_ax in [ax_age, ax_cohort]:
+    annotation_ax.set_xticks([])
+    annotation_ax.set_yticks([])
+
+    # Align strip edges with the main heatmap
+    annotation_ax.set_xlim(-0.5, len(donor_order) - 0.5)
+
+    for spine in annotation_ax.spines.values():
+        spine.set_visible(False)
+
+
+# =====================================================
+# 10. Colorbar
+# =====================================================
+
+cb = fig.colorbar(im, cax=cax)
+
+cb.set_label(
+    "Gene-wise Z-score",
+    fontsize=11,
+    labelpad=10
+)
+
+cb.set_ticks([-2, -1, 0, 1, 2])
+cb.outline.set_visible(False)
+
+
+# =====================================================
+# 11. Legend
+# =====================================================
+
+legend_items = [
+    Patch(
+        facecolor=age_colors["Young"],
+        label="Young"
+    ),
+    Patch(
+        facecolor=age_colors["Old"],
+        label="Old"
+    ),
+    Patch(
+        facecolor=cohort_colors["SoleBoldo_2020"],
+        label="Solé-Boldo 2020"
+    ),
+    Patch(
+        facecolor=cohort_colors["GSE274955"],
+        label="GSE274955"
+    )
+]
+
+fig.legend(
+    handles=legend_items,
+    loc="upper center",
+    bbox_to_anchor=(0.53, 0.935),
+    ncol=4,
+    frameon=False,
+    fontsize=10
+)
+
+
+# =====================================================
+# 12. Title
+# =====================================================
+
+fig.suptitle(
+    "Age-associated candidate genes in human dermal fibroblasts",
+    fontsize=15,
+    fontweight="bold",
+    y=0.985
+)
+
+
+# =====================================================
+# 13. Save PNG and PDF
+# =====================================================
+
+png = outdir / "Fig2E_Fibroblast_Top30_DonorAge_Heatmap.png"
+pdf = outdir / "Fig2E_Fibroblast_Top30_DonorAge_Heatmap.pdf"
+
+fig.savefig(
+    png,
+    dpi=450,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+fig.savefig(
+    pdf,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+plt.show()
+
+print("\nSaved PNG:", png)
+print("Saved PDF:", pdf)
+print("PNG size:", round(png.stat().st_size / 1024, 1), "KB")
+
+
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.colors import TwoSlopeNorm
+from matplotlib.patches import Patch
+from pathlib import Path
+
+# ==========================================
+# 1. Output
+# ==========================================
+outdir = Path(
+    "/home/ecs-user/skin_spatial_project/"
+    "Integrated_8Donor_Skin/figures"
+)
+outdir.mkdir(parents=True, exist_ok=True)
+
+# ==========================================
+# 2. Sort donors by actual age
+# ==========================================
+age_map = {
+    "Butt_23": 23,
+    "LS_S1": 25,
+    "LS_S2": 27,
+    "Butt_53": 53,
+    "LS_S5": 69,
+    "LS_S4": 70,
+    "Butt_85": 85
+}
+
+meta = metadata.copy()
+meta["age_numeric"] = meta.index.map(age_map)
+
+donor_order = (
+    meta.sort_values("age_numeric").index.tolist()
+)
+meta = meta.loc[donor_order]
+
+# ==========================================
+# 3. Top 30 consistent-direction genes
+# ==========================================
+genes_df = candidates[
+    candidates["same_direction"]
+].sort_values(
+    "min_abs_delta",
+    ascending=False
+)
+
+TOP_N = 30
+
+genes = [
+    g for g in genes_df.index
+    if g in donor_expr.columns
+][:TOP_N]
+
+# Rows = donors, columns = genes
+expr = donor_expr.loc[donor_order, genes]
+
+# Gene-wise Z-score across 7 donors
+z = (
+    expr - expr.mean(axis=0)
+) / expr.std(axis=0, ddof=0).replace(0, 1)
+
+z = z.fillna(0)
+
+# ==========================================
+# 4. Figure
+# ==========================================
+fig = plt.figure(figsize=(17, 5.8))
+
+gs = fig.add_gridspec(
+    1, 3,
+    width_ratios=[0.35, 0.35, 30],
+    wspace=0.04,
+    left=0.08,
+    right=0.97,
+    top=0.78,
+    bottom=0.30
+)
+
+ax_age = fig.add_subplot(gs[0, 0])
+ax_cohort = fig.add_subplot(gs[0, 1])
+ax = fig.add_subplot(gs[0, 2])
+
+im = ax.imshow(
+    z.values,
+    aspect="auto",
+    cmap="RdBu_r",
+    norm=TwoSlopeNorm(vmin=-2, vcenter=0, vmax=2),
+    interpolation="nearest"
+)
+
+ax.set_xticks(range(len(genes)))
+ax.set_xticklabels(
+    genes,
+    rotation=60,
+    ha="right",
+    fontsize=9
+)
+
+ax.set_yticks(range(len(donor_order)))
+ax.set_yticklabels(
+    [
+        f"{d} ({int(meta.loc[d, 'age_numeric'])}y)"
+        for d in donor_order
+    ],
+    fontsize=10
+)
+
+ax.yaxis.tick_right()
+ax.tick_params(axis="both", length=0, pad=6)
+
+# Thin grid lines
+ax.set_xticks(
+    np.arange(-0.5, len(genes), 1), minor=True
+)
+ax.set_yticks(
+    np.arange(-0.5, len(donor_order), 1), minor=True
+)
+ax.grid(which="minor", color="white", linewidth=0.7)
+ax.tick_params(which="minor", bottom=False, left=False)
+
+for spine in ax.spines.values():
+    spine.set_visible(False)
+
+# ==========================================
+# 5. Age and cohort annotation strips
+# ==========================================
+age_colors = {
+    "Young": "#4C78A8",
+    "Old": "#E08B58"
+}
+cohort_colors = {
+    "SoleBoldo_2020": "#8C79AD",
+    "GSE274955": "#67A78D"
+}
+
+from matplotlib.colors import to_rgb
+
+age_rgb = np.array([
+    to_rgb(age_colors[meta.loc[d, "age_group"]])
+    for d in donor_order
+]).reshape(len(donor_order), 1, 3)
+
+cohort_rgb = np.array([
+    to_rgb(cohort_colors[meta.loc[d, "cohort"]])
+    for d in donor_order
+]).reshape(len(donor_order), 1, 3)
+
+ax_age.imshow(age_rgb, aspect="auto")
+ax_cohort.imshow(cohort_rgb, aspect="auto")
+
+for a, label in [
+    (ax_age, "Age"),
+    (ax_cohort, "Cohort")
+]:
+    a.set_xticks([])
+    a.set_yticks([])
+    a.set_title(label, fontsize=10, rotation=90, pad=12)
+    for spine in a.spines.values():
+        spine.set_visible(False)
+
+# ==========================================
+# 6. Colorbar and legend
+# ==========================================
+cb = fig.colorbar(
+    im,
+    ax=ax,
+    orientation="horizontal",
+    fraction=0.07,
+    pad=0.52,
+    shrink=0.35
+)
+cb.set_label("Gene-wise Z-score", fontsize=10)
+cb.set_ticks([-2, -1, 0, 1, 2])
+cb.outline.set_visible(False)
+
+legend_items = [
+    Patch(facecolor=age_colors["Young"], label="Young"),
+    Patch(facecolor=age_colors["Old"], label="Old"),
+    Patch(facecolor=cohort_colors["SoleBoldo_2020"],
+          label="Solé-Boldo"),
+    Patch(facecolor=cohort_colors["GSE274955"],
+          label="GSE274955")
+]
+
+fig.legend(
+    handles=legend_items,
+    loc="upper center",
+    bbox_to_anchor=(0.52, 0.94),
+    ncol=4,
+    frameon=False,
+    fontsize=10
+)
+
+fig.suptitle(
+    "Age-associated candidate genes in dermal fibroblasts",
+    fontsize=15,
+    fontweight="bold",
+    y=1.04
+)
+
+# ==========================================
+# 7. Save
+# ==========================================
+png = outdir / "Fig2E_Fibroblast_Top30_Horizontal.png"
+pdf = outdir / "Fig2E_Fibroblast_Top30_Horizontal.pdf"
+
+fig.savefig(
+    png, dpi=450,
+    bbox_inches="tight",
+    facecolor="white"
+)
+fig.savefig(
+    pdf,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+plt.show()
+
+print("Saved PNG:", png)
+print("Saved PDF:", pdf)
+
+
+
+
+
+
