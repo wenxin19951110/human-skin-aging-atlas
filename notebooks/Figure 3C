@@ -1,0 +1,467 @@
+
+import scanpy as sc
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+# 1. Extract basal keratinocytes
+basal = epidermis[
+    epidermis.obs["unified_broad"] == "Bas KC"
+].copy()
+
+print("Basal KC:", basal.shape)
+
+# 2. Check donor distribution
+donor_table = pd.crosstab(
+    basal.obs["donor_id"],
+    basal.obs["cohort"]
+)
+
+print("\nBasal cells per donor:")
+display(donor_table)
+
+# 3. Use existing Harmony embedding
+assert "X_pca_harmony" in basal.obsm
+
+sc.pp.neighbors(
+    basal,
+    use_rep="X_pca_harmony",
+    n_neighbors=15,
+    n_pcs=30
+)
+
+# 4. Leiden clustering
+sc.tl.leiden(
+    basal,
+    resolution=0.4,
+    key_added="basal_cluster"
+)
+
+# 5. Recompute basal-specific UMAP
+sc.tl.umap(
+    basal,
+    min_dist=0.3,
+    random_state=42
+)
+
+print("\nCluster sizes:")
+print(basal.obs["basal_cluster"].value_counts())
+
+# 6. Save
+basal.write_h5ad(
+    root / "Integrated_8Donor_Skin" /
+    "BasalKC_8Donors_Clustered.h5ad"
+)
+
+
+
+
+fig, axes = plt.subplots(
+    1, 3,
+    figsize=(14, 4.3)
+)
+
+for ax, col, title in zip(
+    axes,
+    ["basal_cluster", "cohort", "age_group"],
+    ["Basal clusters", "Dataset", "Age group"]
+):
+    sc.pl.umap(
+        basal,
+        color=col,
+        ax=ax,
+        title=title,
+        frameon=False,
+        size=20,
+        show=False,
+        legend_loc="right margin"
+    )
+
+fig.suptitle(
+    "Basal keratinocyte transcriptional heterogeneity",
+    fontsize=14,
+    fontweight="bold",
+    y=1.03
+)
+
+fig.tight_layout()
+
+fig.savefig(
+    outdir / "Fig3C_BasalKC_Subclusters.png",
+    dpi=400,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+fig.savefig(
+    outdir / "Fig3C_BasalKC_Subclusters.pdf",
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+plt.show()
+
+
+
+
+
+import scanpy as sc
+import pandas as pd
+
+# Find cluster-enriched markers
+sc.tl.rank_genes_groups(
+    basal,
+    groupby="basal_cluster",
+    method="wilcoxon",
+    use_raw=False,
+    pts=True
+)
+
+# Extract top markers for every cluster
+marker_tables = []
+
+for cluster in basal.obs["basal_cluster"].cat.categories:
+    df = sc.get.rank_genes_groups_df(
+        basal,
+        group=str(cluster)
+    )
+
+    df = df[
+        (df["logfoldchanges"] > 0.5) &
+        (df["pvals_adj"] < 0.05)
+    ].head(10).copy()
+
+    df["cluster"] = str(cluster)
+
+    marker_tables.append(df)
+
+markers_all = pd.concat(marker_tables)
+
+marker_summary = (
+    markers_all.groupby("cluster")["names"]
+    .apply(lambda x: ", ".join(x))
+    .reset_index(name="Top markers")
+)
+
+display(marker_summary)
+
+
+
+
+import pandas as pd
+
+cluster_donor = pd.crosstab(
+    basal.obs["basal_cluster"],
+    basal.obs["donor_id"]
+)
+
+# Percentage of each cluster from each donor
+cluster_donor_pct = (
+    cluster_donor.div(
+        cluster_donor.sum(axis=1),
+        axis=0
+    ) * 100
+)
+
+print("Number of cells:")
+display(cluster_donor)
+
+print("Donor contribution to each cluster (%):")
+display(cluster_donor_pct.round(1))
+
+
+
+
+import scanpy as sc
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+# 如果重启过 Jupyter kernel，重新加载
+if "basal" not in globals():
+    basal = sc.read_h5ad(
+        root / "Integrated_8Donor_Skin" /
+        "BasalKC_8Donors_Clustered.h5ad"
+    )
+
+# 不同细胞身份的 marker
+marker_groups = {
+    "Basal KC": [
+        "KRT5", "KRT14", "KRT15", "COL17A1"
+    ],
+    "Differentiation": [
+        "KRT1", "KRT10", "DSG1"
+    ],
+    "Langerhans / Immune": [
+        "CD207", "CD1A", "CD74", "PTPRC",
+        "HLA-DRA", "LCP1"
+    ],
+    "Follicular-like": [
+        "KRT17", "SOX9", "FOXC1"
+    ],
+    "Stress": [
+        "HSPA1A", "DNAJB1", "FOS", "ATF3"
+    ]
+}
+
+genes = list(dict.fromkeys(
+    g for group in marker_groups.values()
+    for g in group
+    if g in basal.var_names
+))
+
+# UMAP marker expression
+sc.pl.umap(
+    basal,
+    color=[
+        "basal_cluster",
+        "KRT14",
+        "CD207",
+        "PTPRC",
+        "HLA-DRA",
+        "KRT17"
+    ],
+    ncols=3,
+    size=18,
+    frameon=False,
+    cmap="viridis",
+    show=True
+)
+
+# Cluster 3 / 7 marker summaries
+target_clusters = ["3", "7"]
+
+sub = basal[
+    basal.obs["basal_cluster"]
+    .astype(str)
+    .isin(target_clusters)
+].copy()
+
+from scipy import sparse
+
+X = sub[:, genes].X
+if sparse.issparse(X):
+    X = X.toarray()
+
+expr = pd.DataFrame(
+    np.asarray(X),
+    columns=genes,
+    index=sub.obs_names
+)
+
+expr["cluster"] = sub.obs["basal_cluster"].astype(str).values
+
+mean_expr = expr.groupby("cluster").mean()
+positive_pct = expr.groupby("cluster").apply(
+    lambda d: (d[genes] > 0).mean() * 100
+)
+
+print("Mean normalized expression:")
+display(mean_expr.round(2))
+
+print("Positive-cell fraction (%):")
+display(positive_pct.round(1))
+
+
+
+
+import pandas as pd
+
+qc_cols = [
+    "total_counts",
+    "n_genes_by_counts",
+    "pct_counts_mt"
+]
+
+qc_cols = [c for c in qc_cols if c in basal.obs.columns]
+
+qc_summary = (
+    basal.obs
+    .groupby("basal_cluster", observed=True)[qc_cols]
+    .median()
+    .round(2)
+)
+
+qc_summary["n_cells"] = (
+    basal.obs["basal_cluster"]
+    .value_counts()
+    .reindex(qc_summary.index)
+)
+
+display(qc_summary)
+
+
+
+
+
+import scanpy as sc
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+# Exclude suspected doublet cluster 7
+basal_clean = basal[
+    basal.obs["basal_cluster"].astype(str) != "7"
+].copy()
+
+# Remove unused cluster category
+basal_clean.obs["basal_cluster"] = (
+    basal_clean.obs["basal_cluster"]
+    .cat.remove_unused_categories()
+)
+
+print("Before QC:", basal.n_obs)
+print("After QC:", basal_clean.n_obs)
+
+# Save filtered subset
+basal_clean.write_h5ad(
+    root / "Integrated_8Donor_Skin" /
+    "BasalKC_8Donors_QCfiltered.h5ad"
+)
+
+
+marker_groups = {
+    "Stem-cell-associated": [
+        "SLC1A3", "ASS1", "KRT15", "KRT19"
+    ],
+    "Basal adhesion": [
+        "COL17A1", "ITGA6", "ITGB1", "ITGB4"
+    ],
+    "Differentiation": [
+        "KRT1", "KRT10"
+    ],
+    "Proliferation": [
+        "MKI67", "TOP2A"
+    ]
+}
+
+markers = {
+    k: [g for g in v if g in basal_clean.var_names]
+    for k, v in marker_groups.items()
+}
+markers = {k: v for k, v in markers.items() if v}
+
+dp = sc.pl.dotplot(
+    basal_clean,
+    var_names=markers,
+    groupby="basal_cluster",
+    standard_scale="var",
+    cmap="Reds",
+    show=False,
+    return_fig=True
+)
+
+dp.savefig(
+    outdir / "Fig3D_BasalKC_StemCell_Markers.png"
+)
+dp.savefig(
+    outdir / "Fig3D_BasalKC_StemCell_Markers.pdf"
+)
+
+plt.show()
+
+
+
+
+
+import scanpy as sc
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+# Load QC-filtered basal cells if necessary
+if "basal_clean" not in globals():
+    basal_clean = sc.read_h5ad(
+        root / "Integrated_8Donor_Skin" /
+        "BasalKC_8Donors_QCfiltered.h5ad"
+    )
+
+# Provisional biological annotation
+annotation_map = {
+    "0": "Heat-shock response",
+    "1": "Immediate-early response",
+    "2": "KRT14-associated basal",
+    "3": "MHC-II-associated basal",
+    "4": "Differentiation-associated",
+    "5": "KRT17-associated basal",
+    "6": "COL17A1-high basal"
+}
+
+basal_clean.obs["basal_annotation"] = (
+    basal_clean.obs["basal_cluster"]
+    .astype(str)
+    .map(annotation_map)
+)
+
+# Ensure correct category order
+basal_clean.obs["basal_annotation"] = (
+    basal_clean.obs["basal_annotation"]
+    .astype("category")
+)
+
+# Create annotated UMAP
+fig = sc.pl.umap(
+    basal_clean,
+    color="basal_annotation",
+    title="Basal keratinocyte transcriptional states",
+    legend_loc="right margin",
+    legend_fontsize=9,
+    frameon=False,
+    size=24,
+    show=False,
+    return_fig=True
+)
+
+# Save
+png = outdir / "Fig3C_BasalKC_Annotated_UMAP.png"
+pdf = outdir / "Fig3C_BasalKC_Annotated_UMAP.pdf"
+
+fig.savefig(
+    png,
+    dpi=400,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+fig.savefig(
+    pdf,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+plt.show()
+plt.close(fig)
+
+# Save annotations to AnnData
+basal_clean.write_h5ad(
+    root / "Integrated_8Donor_Skin" /
+    "BasalKC_8Donors_Annotated.h5ad"
+)
+
+print("Saved PNG:", png)
+print("Saved PDF:", pdf)
+print("Annotated cells:", basal_clean.n_obs)
+
+
+
+
+
+
+
+
+
