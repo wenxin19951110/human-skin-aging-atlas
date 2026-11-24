@@ -1056,6 +1056,37 @@ print("Saved PDF:", pdf)
 
 
 
+import pandas as pd
+
+genes_to_check = [
+    "SFRP2", "THY1", "CXCL2",
+    "CXCL1", "POSTN", "CXCL8",
+    "IGFBP7", "IL32", "FBLN5"
+]
+
+gene_coverage = pd.DataFrame({
+    "Gene": genes_to_check,
+    "In_MERFISH": [
+        g in merfish.var_names
+        for g in genes_to_check
+    ]
+})
+
+gene_coverage["Status"] = gene_coverage[
+    "In_MERFISH"
+].map({
+    True: "Available",
+    False: "Not in panel"
+})
+
+display(gene_coverage)
+
+print(
+    "\nAvailable genes:",
+    gene_coverage.loc[
+        gene_coverage["In_MERFISH"], "Gene"
+    ].tolist()
+)
 
 
 
