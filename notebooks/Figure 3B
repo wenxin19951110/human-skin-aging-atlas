@@ -1,0 +1,59 @@
+
+import scanpy as sc
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+marker_groups = {
+    "Basal": [
+        "KRT5", "KRT14", "KRT15", "COL17A1"
+    ],
+    "Differentiation": [
+        "KRT1", "KRT10", "IVL", "FLG", "LOR"
+    ],
+    "Cycling": [
+        "MKI67", "TOP2A", "UBE2C"
+    ],
+    "Adhesion / stem-cell": [
+        "ITGA6", "ITGB1", "SLC1A3", "ASS1"
+    ]
+}
+
+# Keep only genes present
+markers = {
+    group: [g for g in genes if g in epidermis.var_names]
+    for group, genes in marker_groups.items()
+}
+markers = {k: v for k, v in markers.items() if v}
+
+print("Markers available:", markers)
+
+dp = sc.pl.dotplot(
+    epidermis,
+    var_names=markers,
+    groupby="epidermal_state",
+    standard_scale="var",
+    dendrogram=False,
+    cmap="Reds",
+    show=False,
+    return_fig=True
+)
+
+dp.style(
+    dot_edge_color="white",
+    dot_edge_lw=0.3
+)
+
+png = outdir / "Fig3B_Epidermal_Marker_Dotplot.png"
+pdf = outdir / "Fig3B_Epidermal_Marker_Dotplot.pdf"
+
+dp.savefig(png)
+dp.savefig(pdf)
+
+plt.show()
+
+print("Saved:", png)
+print("Saved:", pdf)
