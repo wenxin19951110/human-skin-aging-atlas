@@ -1,0 +1,130 @@
+
+import scanpy as sc
+import pandas as pd
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+adata = sc.read_h5ad(
+    root / "Integrated_8Donor_Skin" /
+    "Human_Skin_8Donors_Harmony_UMAP.h5ad"
+)
+
+print("Whole skin dataset:", adata.shape)
+
+print("\nCell type annotations:")
+display(
+    adata.obs["unified_broad"]
+    .value_counts()
+    .to_frame("n_cells")
+)
+
+print("\nAvailable metadata:")
+print(adata.obs.columns.tolist())
+
+print("\nExpression matrix:")
+print("Layers:", list(adata.layers.keys()))
+print("Raw available:", adata.raw is not None)
+
+print("\nExisting embeddings:")
+print(list(adata.obsm.keys()))
+
+
+
+
+import scanpy as sc
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+# Extract epidermal keratinocytes
+epidermis = adata[
+    adata.obs["unified_broad"].isin(
+        ["Bas KC", "Diff KC", "Cyc KC"]
+    )
+].copy()
+
+print("Epidermal cells:", epidermis.shape)
+
+print("\nCell composition:")
+print(epidermis.obs["unified_broad"].value_counts())
+
+# Set plotting categories
+epidermis.obs["epidermal_state"] = (
+    epidermis.obs["unified_broad"]
+    .astype("category")
+    .cat.set_categories(
+        ["Bas KC", "Diff KC", "Cyc KC"]
+    )
+)
+
+# Save subset for later analyses
+epidermis.write_h5ad(
+    root / "Integrated_8Donor_Skin" /
+    "Epidermal_KC_8Donors.h5ad"
+)
+
+# Plot the three UMAPs
+fig, axes = plt.subplots(
+    1, 3,
+    figsize=(15, 4.5)
+)
+
+plot_settings = [
+    ("epidermal_state", "Epidermal identity"),
+    ("cohort", "Dataset"),
+    ("age_group", "Age group")
+]
+
+for ax, (color, title) in zip(axes, plot_settings):
+
+    sc.pl.umap(
+        epidermis,
+        color=color,
+        ax=ax,
+        title=title,
+        frameon=False,
+        size=10,
+        legend_loc="right margin",
+        show=False
+    )
+
+fig.suptitle(
+    "Epidermal keratinocyte populations",
+    fontsize=14,
+    fontweight="bold",
+    y=1.02
+)
+
+fig.tight_layout()
+
+png = outdir / "Fig3A_Epidermal_UMAP.png"
+pdf = outdir / "Fig3A_Epidermal_UMAP.pdf"
+
+fig.savefig(
+    png,
+    dpi=400,
+    bbox_inches="tight",
+    facecolor="white"
+)
+fig.savefig(
+    pdf,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+plt.show()
+
+print("Saved PNG:", png)
+print("Saved PDF:", pdf)
+
+
+
+
+
+
