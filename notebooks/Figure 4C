@@ -1,0 +1,24 @@
+
+import scanpy as sc
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+
+merfish_path = (
+    root / "Restrepo_MERFISH" /
+    "merfish.integrated_annotated.h5ad"
+)
+
+# Backed mode，避免读取整个表达矩阵
+merfish = sc.read_h5ad(
+    merfish_path,
+    backed="r"
+)
+
+print("MERFISH loaded successfully!")
+print("Cells:", merfish.n_obs)
+print("Genes:", merfish.n_vars)
+print("Spatial coordinates:", "spatial" in merfish.obsm)
+
+
+
