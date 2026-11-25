@@ -1,0 +1,180 @@
+
+import scanpy as sc
+from pathlib import Path
+import pandas as pd
+
+root = Path("/home/ecs-user/skin_spatial_project")
+
+# 1. 只以 backed mode 加载 MERFISH
+# 不会把约120万个细胞的表达矩阵全部读入内存
+merfish = sc.read_h5ad(
+    root / "Restrepo_MERFISH" /
+    "merfish.integrated_annotated.h5ad",
+    backed="r"
+)
+
+# 2. Figure 3E 的19个基因
+genes = [
+    "ITGA3", "ITGA6", "ITGB1", "ITGB3",
+    "ITGB4", "CD151", "DSC2", "LAMA3",
+    "LAMB3", "COL7A1",
+    "ASS1", "SLC1A3", "KRT15",
+    "COL17A1", "KRT5", "KRT14",
+    "MKI67", "TOP2A", "PCNA"
+]
+
+# 3. 检查 MERFISH panel
+coverage = pd.DataFrame({
+    "Gene": genes,
+    "In_MERFISH": [
+        g in merfish.var_names for g in genes
+    ]
+})
+
+display(coverage)
+
+available = coverage.loc[
+    coverage["In_MERFISH"], "Gene"
+].tolist()
+
+missing = coverage.loc[
+    ~coverage["In_MERFISH"], "Gene"
+].tolist()
+
+print("\nAvailable:", len(available), available)
+print("Not in panel:", len(missing), missing)
+
+
+
+
+
+import scanpy as sc
+import pandas as pd
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+
+# 如果变量不存在，重新加载
+if "merfish" not in globals():
+    merfish = sc.read_h5ad(
+        root / "Restrepo_MERFISH" /
+        "merfish.integrated_annotated.h5ad",
+        backed="r"
+    )
+
+# 查看 MERFISH 上皮细胞注释
+cell_types = (
+    merfish.obs["cell_type.detailed"]
+    .astype(str)
+    .value_counts()
+)
+
+epithelial_labels = cell_types[
+    cell_types.index.str.contains(
+        "KC|Bas|Epi|Keratin",
+        case=False,
+        regex=True
+    )
+]
+
+display(epithelial_labels)
+
+
+
+
+
+import numpy as np
+import pandas as pd
+from scipy import sparse
+
+genes_check = [
+    "ITGA3", "ITGA6", "ITGB1", "ITGB4",
+    "CD151", "LAMA3", "LAMB3", "COL7A1",
+    "ASS1", "KRT15", "COL17A1",
+    "MKI67", "TOP2A", "PCNA"
+]
+
+sections = [
+    ("D151--7-12--03152024.region_5", "Inguinal | 36y"),
+    ("D145--7-12--04112024.region_1", "Inguinal | 77y"),
+    ("D151--7-12--03152024.region_4", "Buttocks | 36y"),
+    ("D145--7-12--04112024.region_2", "Buttocks | 77y")
+]
+
+# 查看哪些 detailed labels 被当作 basal KC
+basal_labels = [
+    name for name in merfish.obs["cell_type.detailed"]
+    .astype(str).unique()
+    if "bas" in name.lower() and "kc" in name.lower()
+]
+
+print("Selected basal KC labels:", basal_labels)
+
+if not basal_labels:
+    raise ValueError(
+        "No basal KC labels identified. Check annotation names first."
+    )
+
+records = []
+
+for region, label in sections:
+
+    mask = (
+        merfish.obs["run_region"].astype(str).eq(region)
+        &
+        merfish.obs["cell_type.detailed"]
+        .astype(str).isin(basal_labels)
+    ).to_numpy()
+
+    sub = merfish[mask, genes_check].to_memory()
+
+    if sub.n_obs == 0:
+        print("No basal KC:", label)
+        continue
+
+    X = sub.layers["log1p"]
+
+    if sparse.issparse(X):
+        X = X.toarray()
+
+    X = np.asarray(X)
+
+    for gi, gene in enumerate(genes_check):
+        values = X[:, gi]
+
+        records.append({
+            "Section": label,
+            "Gene": gene,
+            "n_basal_KC": sub.n_obs,
+            "Mean_expression": values.mean(),
+            "Positive_pct": (values > 0).mean() * 100
+        })
+
+qc = pd.DataFrame(records)
+
+print("\nBasal KC positive fraction (%):")
+display(
+    qc.pivot(
+        index="Gene",
+        columns="Section",
+        values="Positive_pct"
+    ).round(2)
+)
+
+print("\nMean expression:")
+display(
+    qc.pivot(
+        index="Gene",
+        columns="Section",
+        values="Mean_expression"
+    ).round(3)
+)
+
+print("\nBasal KC counts:")
+display(
+    qc[["Section", "n_basal_KC"]].drop_duplicates()
+)
+
+
+
+
