@@ -1,0 +1,243 @@
+
+import scanpy as sc
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy import sparse
+from matplotlib.colors import Normalize
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+# Load integrated scRNA-seq
+if "scrna" not in globals():
+    scrna = sc.read_h5ad(
+        root / "Integrated_8Donor_Skin" /
+        "Human_Skin_8Donors_Harmony_UMAP.h5ad"
+    )
+
+# Candidate genes, grouped by pathway
+groups = {
+    "FGF": ["FGF7", "FGFR2"],
+    "HGF": ["HGF", "MET"],
+    "TGF-beta": ["TGFB1", "TGFB2", "TGFBR2"],
+    "Chemokine": ["CXCL12", "CXCR4"],
+    "Notch": ["JAG1", "NOTCH1"],
+    "WNT candidate": ["WNT5A", "FZD2"]
+}
+
+genes = list(dict.fromkeys(
+    g for group in groups.values()
+    for g in group
+    if g in scrna.var_names
+))
+
+# Select Fib and Bas KC
+sub = scrna[
+    scrna.obs["unified_broad"].isin(["Fib", "Bas KC"]),
+    genes
+].copy()
+
+X = sub.X
+if sparse.issparse(X):
+    X = X.toarray()
+X = np.asarray(X)
+
+expr = pd.DataFrame(X, columns=genes)
+expr["Cell type"] = (
+    sub.obs["unified_broad"].astype(str).values
+)
+
+cell_types = ["Fib", "Bas KC"]
+
+mean_expr = (
+    expr.groupby("Cell type")[genes]
+    .mean()
+    .reindex(cell_types)
+)
+
+positive_pct = (
+    expr[genes].gt(0)
+    .assign(**{"Cell type": expr["Cell type"]})
+    .groupby("Cell type")[genes]
+    .mean()
+    .reindex(cell_types) * 100
+)
+
+# Save quantitative summaries
+mean_expr.to_csv(
+    outdir / "Fig4B_MeanExpression.csv"
+)
+positive_pct.to_csv(
+    outdir / "Fig4B_PositiveFraction.csv"
+)
+
+# ==========================================
+# Publication-style dot plot
+# ==========================================
+fig, ax = plt.subplots(figsize=(11, 3.6))
+
+norm = Normalize(
+    vmin=0,
+    vmax=max(mean_expr.to_numpy().max(), 1e-6)
+)
+
+scatter = None
+
+for yi, ct in enumerate(cell_types):
+    for xi, gene in enumerate(genes):
+
+        pct = positive_pct.loc[ct, gene]
+        avg = mean_expr.loc[ct, gene]
+
+        scatter = ax.scatter(
+            xi, yi,
+            s=12 + pct * 4.6,
+            c=[avg],
+            cmap="Reds",
+            norm=norm,
+            edgecolors="#777777",
+            linewidths=0.25
+        )
+
+ax.set_xticks(range(len(genes)))
+ax.set_xticklabels(
+    genes, rotation=55,
+    ha="right", fontsize=9
+)
+
+ax.set_yticks(range(len(cell_types)))
+ax.set_yticklabels(cell_types, fontsize=11)
+
+ax.set_xlim(-0.7, len(genes) - 0.3)
+ax.set_ylim(-0.6, len(cell_types) - 0.4)
+ax.invert_yaxis()
+
+# Pathway separators and labels
+position = 0
+for name, gene_list in groups.items():
+    present = [g for g in gene_list if g in genes]
+    n = len(present)
+
+    if n == 0:
+        continue
+
+    center = position + (n - 1) / 2
+
+    ax.text(
+        center, 1.11, name,
+        transform=ax.get_xaxis_transform(),
+        ha="center", va="bottom",
+        fontsize=8,
+        color="#444444"
+    )
+
+    position += n
+    if position < len(genes):
+        ax.axvline(
+            position - 0.5,
+            color="#bbbbbb",
+            lw=0.8
+        )
+
+ax.set_title(
+    "Cell-type expression of candidate signalling genes",
+    fontsize=12,
+    fontweight="bold",
+    pad=30
+)
+
+for spine in ax.spines.values():
+    spine.set_visible(False)
+
+ax.tick_params(length=0)
+
+# Expression colorbar
+cbar = fig.colorbar(
+    scatter,
+    ax=ax,
+    fraction=0.025,
+    pad=0.035
+)
+cbar.set_label(
+    "Mean log-normalized expression",
+    fontsize=9
+)
+cbar.ax.tick_params(labelsize=8)
+
+# Dot-size legend
+legend_sizes = [10, 30, 50, 70, 90]
+
+handles = [
+    ax.scatter(
+        [], [],
+        s=12 + p * 4.6,
+        color="#999999",
+        edgecolors="#777777",
+        linewidths=0.25,
+        label=f"{p}%"
+    )
+    for p in legend_sizes
+]
+
+ax.legend(
+    handles=handles,
+    title="Positive cells",
+    bbox_to_anchor=(1.16, 0.50),
+    loc="center left",
+    frameon=False,
+    fontsize=8,
+    title_fontsize=9
+)
+
+fig.subplots_adjust(
+    left=0.09,
+    right=0.79,
+    top=0.75,
+    bottom=0.29
+)
+
+png = outdir / "Fig4B_CellType_Signalling_Dotplot.png"
+pdf = outdir / "Fig4B_CellType_Signalling_Dotplot.pdf"
+
+fig.savefig(
+    png, dpi=400,
+    bbox_inches="tight",
+    facecolor="white"
+)
+fig.savefig(
+    pdf,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+plt.show()
+plt.close(fig)
+
+print("Saved:", png)
+print("Saved:", pdf)
+
+display(positive_pct.round(1))
+
+
+
+pairs = {
+    "FGF7_FGFR2": ["FGF7", "FGFR2"],
+    "HGF_MET": ["HGF", "MET"],
+    "CXCL12_CXCR4": ["CXCL12", "CXCR4"],
+    "TGFB1_TGFBR2": ["TGFB1", "TGFBR2"],
+}
+
+all_genes = sorted(set(sum(pairs.values(), [])))
+
+check_df = pd.DataFrame({
+    "Gene": all_genes,
+    "In_MERFISH": [g in merfish.var_names for g in all_genes]
+})
+
+display(check_df)
+
+
+
