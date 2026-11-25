@@ -1,0 +1,90 @@
+
+import scanpy as sc
+import pandas as pd
+from pathlib import Path
+
+root = Path("/home/ecs-user/skin_spatial_project")
+
+# Load scRNA-seq and MERFISH
+scrna = sc.read_h5ad(
+    root / "Integrated_8Donor_Skin" /
+    "Human_Skin_8Donors_Harmony_UMAP.h5ad"
+)
+
+merfish = sc.read_h5ad(
+    root / "Restrepo_MERFISH" /
+    "merfish.integrated_annotated.h5ad",
+    backed="r"
+)
+
+# Candidate signaling molecules
+pathways = {
+    "FGF": ["FGF7", "FGFR2"],
+    "HGF": ["HGF", "MET"],
+    "WNT": ["WNT5A", "FZD6"],
+    "TGF-beta": ["TGFB1", "TGFBR2"],
+    "Chemokine": ["CXCL12", "CXCR4"],
+    "ECM-integrin": [
+        "FN1", "COL1A1", "POSTN",
+        "ITGA3", "ITGA6", "ITGB1"
+    ],
+    "Additional adhesion": [
+        "COL17A1", "ITGB4", "LAMA3",
+        "LAMB3", "FBLN5", "NECTIN3",
+        "PVRL3"
+    ]
+}
+
+records = []
+
+for pathway, genes in pathways.items():
+    for gene in genes:
+        records.append({
+            "Pathway": pathway,
+            "Gene": gene,
+            "scRNA": gene in scrna.var_names,
+            "MERFISH": gene in merfish.var_names
+        })
+
+coverage = pd.DataFrame(records)
+
+print("Gene coverage:")
+display(coverage)
+
+print("\nGenes available in BOTH datasets:")
+display(
+    coverage.loc[
+        coverage["scRNA"] & coverage["MERFISH"],
+        ["Pathway", "Gene"]
+    ]
+)
+
+print("\nMERFISH detailed labels:")
+labels = (
+    merfish.obs["cell_type.detailed"]
+    .astype(str)
+    .value_counts()
+)
+
+display(
+    labels[
+        labels.index.str.contains(
+            "Fib|Bas KC|Bas Inf",
+            case=False,
+            regex=True
+        )
+    ]
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
