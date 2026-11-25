@@ -178,3 +178,251 @@ display(
 
 
 
+
+
+import scanpy as sc
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import sparse
+from matplotlib.colors import Normalize
+from matplotlib.cm import ScalarMappable
+from pathlib import Path
+
+# ==========================================
+# 1. Paths
+# ==========================================
+root = Path("/home/ecs-user/skin_spatial_project")
+
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+merfish_path = (
+    root / "Restrepo_MERFISH" /
+    "merfish.integrated_annotated.h5ad"
+)
+
+# ==========================================
+# 2. Load MERFISH
+# ==========================================
+if "merfish" not in globals():
+    merfish = sc.read_h5ad(
+        merfish_path,
+        backed="r"
+    )
+
+genes_plot = [
+    "ITGA3", "ITGA6", "ITGB1", "ITGB4",
+    "LAMA3", "LAMB3", "COL7A1",
+    "KRT15", "COL17A1"
+]
+
+assert all(g in merfish.var_names for g in genes_plot)
+
+# ==========================================
+# 3. Four representative sections
+# ==========================================
+sections = [
+    ("D151--7-12--03152024.region_5",
+     "Inguinal fold | 36y", 0),
+
+    ("D145--7-12--04112024.region_1",
+     "Inguinal fold | 77y", 180),
+
+    ("D151--7-12--03152024.region_4",
+     "Buttocks | 36y", 0),
+
+    ("D145--7-12--04112024.region_2",
+     "Buttocks | 77y", 180)
+]
+
+def rotate_xy(xy, degrees):
+    xy = np.asarray(xy, dtype=float)
+    xy = xy - xy.mean(axis=0)
+
+    angle = np.deg2rad(degrees)
+    R = np.array([
+        [np.cos(angle), -np.sin(angle)],
+        [np.sin(angle),  np.cos(angle)]
+    ])
+    return xy @ R.T
+
+# ==========================================
+# 4. Extract section data
+# ==========================================
+section_data = []
+
+region_values = merfish.obs["run_region"].astype(str)
+
+for region, label, degrees in sections:
+
+    mask = region_values.eq(region).to_numpy()
+
+    if mask.sum() == 0:
+        raise ValueError(f"Section not found: {region}")
+
+    sub = merfish[mask, genes_plot].to_memory()
+
+    xy = rotate_xy(sub.obsm["spatial"], degrees)
+
+    X = sub.layers["log1p"]
+    if sparse.issparse(X):
+        X = X.toarray()
+
+    section_data.append({
+        "label": label,
+        "xy": xy,
+        "expr": np.asarray(X)
+    })
+
+    print(label, "| cells:", sub.n_obs)
+
+    del sub
+
+# ==========================================
+# 5. Shared scales across sections
+# ==========================================
+vmax_list = []
+
+for gi, gene in enumerate(genes_plot):
+
+    values = np.concatenate([
+        d["expr"][:, gi] for d in section_data
+    ])
+
+    positive = values[
+        np.isfinite(values) & (values > 0)
+    ]
+
+    vmax = (
+        np.percentile(positive, 99)
+        if len(positive) else 1.0
+    )
+
+    vmax_list.append(max(vmax, 1e-6))
+
+# ==========================================
+# 6. Publication-style spatial figure
+# ==========================================
+fig = plt.figure(figsize=(13.5, 19))
+
+gs = fig.add_gridspec(
+    nrows=len(genes_plot),
+    ncols=5,
+    width_ratios=[1, 1, 1, 1, 0.045],
+    left=0.065,
+    right=0.95,
+    top=0.95,
+    bottom=0.035,
+    wspace=0.045,
+    hspace=0.11
+)
+
+for gi, gene in enumerate(genes_plot):
+
+    norm = Normalize(
+        vmin=0,
+        vmax=vmax_list[gi]
+    )
+
+    for si, data in enumerate(section_data):
+
+        ax = fig.add_subplot(gs[gi, si])
+
+        xy = data["xy"]
+        values = data["expr"][:, gi]
+
+        positive = (
+            np.isfinite(values) & (values > 0)
+        )
+
+        # Gray background: all tissue cells
+        ax.scatter(
+            xy[:, 0],
+            xy[:, 1],
+            s=0.9,
+            color="#dddddd",
+            linewidths=0,
+            rasterized=True
+        )
+
+        # Gene-positive cells
+        ax.scatter(
+            xy[positive, 0],
+            xy[positive, 1],
+            c=values[positive],
+            cmap="magma",
+            norm=norm,
+            s=2.5,
+            linewidths=0,
+            rasterized=True
+        )
+
+        ax.set_aspect("equal")
+        ax.invert_yaxis()
+        ax.axis("off")
+
+        if gi == 0:
+            ax.set_title(
+                data["label"],
+                fontsize=10,
+                fontweight="bold",
+                pad=6
+            )
+
+        if si == 0:
+            ax.text(
+                -0.10, 0.5, gene,
+                transform=ax.transAxes,
+                rotation=90,
+                fontsize=11,
+                fontweight="bold",
+                va="center",
+                ha="center"
+            )
+
+    cax = fig.add_subplot(gs[gi, 4])
+
+    sm = ScalarMappable(
+        norm=norm,
+        cmap="magma"
+    )
+
+    cb = fig.colorbar(sm, cax=cax)
+    cb.ax.tick_params(labelsize=7)
+    cb.outline.set_visible(False)
+
+fig.suptitle(
+    "MERFISH spatial expression of basal adhesion-associated genes",
+    fontsize=14,
+    fontweight="bold",
+    y=0.985
+)
+
+# ==========================================
+# 7. Save
+# ==========================================
+png = outdir / "Fig3F_MERFISH_9Genes_Spatial.png"
+pdf = outdir / "Fig3F_MERFISH_9Genes_Spatial.pdf"
+
+# Start with moderate DPI to limit memory use
+fig.savefig(
+    png,
+    dpi=250,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+fig.savefig(
+    pdf,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+plt.show()
+plt.close(fig)
+
+print("\nSaved PNG:", png)
+print("Saved PDF:", pdf)
+
+
+
