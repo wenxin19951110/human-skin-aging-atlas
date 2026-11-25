@@ -57,3 +57,365 @@ plt.show()
 
 print("Saved:", png)
 print("Saved:", pdf)
+
+
+
+
+
+import scanpy as sc
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import sparse
+from pathlib import Path
+from matplotlib.lines import Line2D
+
+# ==========================================
+# 1. Paths
+# ==========================================
+root = Path("/home/ecs-user/skin_spatial_project")
+outdir = root / "Integrated_8Donor_Skin" / "figures"
+outdir.mkdir(parents=True, exist_ok=True)
+
+merfish_path = (
+    root / "Restrepo_MERFISH" /
+    "merfish.integrated_annotated.h5ad"
+)
+
+# ==========================================
+# 2. Open MERFISH in backed mode
+# ==========================================
+# Close old backed file handle if it exists
+if "merfish" in globals():
+    try:
+        merfish.file.close()
+    except Exception:
+        pass
+
+merfish = sc.read_h5ad(
+    merfish_path,
+    backed="r"
+)
+
+# ==========================================
+# 3. Candidate ligand-receptor pairs
+# ==========================================
+pairs = [
+    ("FGF7", "FGFR2"),
+    ("TGFB1", "TGFBR2"),
+    ("CXCL12", "CXCR4"),
+    ("JAG1", "NOTCH1")
+]
+
+genes = list(dict.fromkeys(
+    gene for pair in pairs for gene in pair
+))
+
+missing = [
+    g for g in genes
+    if g not in merfish.var_names
+]
+
+if missing:
+    raise ValueError(
+        f"Missing MERFISH genes: {missing}"
+    )
+
+# ==========================================
+# 4. Two inguinal fold sections
+# ==========================================
+sections = [
+    (
+        "D151--7-12--03152024.region_5",
+        "36y | D151",
+        0
+    ),
+    (
+        "D145--7-12--04112024.region_1",
+        "77y | D145",
+        180
+    )
+]
+
+fib_labels = [
+    "Retic Fib I",
+    "Retic Fib II",
+    "Retic Fib III",
+    "Papil Fib",
+    "Perivasc Fib I",
+    "Perivasc Fib II"
+]
+
+def rotate_xy(xy, angle):
+    xy = np.asarray(xy, dtype=float)
+    xy = xy - xy.mean(axis=0)
+
+    theta = np.deg2rad(angle)
+
+    R = np.array([
+        [np.cos(theta), -np.sin(theta)],
+        [np.sin(theta), np.cos(theta)]
+    ])
+
+    return xy @ R.T
+
+# ==========================================
+# 5. Read only the required sections
+# ==========================================
+section_data = {}
+
+region_col = (
+    merfish.obs["run_region"]
+    .astype(str)
+)
+
+for region, label, angle in sections:
+
+    mask = region_col.eq(region).to_numpy()
+
+    if mask.sum() == 0:
+        raise ValueError(
+            f"Section not found: {region}"
+        )
+
+    sub = merfish[mask, genes].to_memory()
+
+    X = sub.layers["counts"]
+
+    if sparse.issparse(X):
+        X = X.toarray()
+
+    X = np.asarray(X)
+
+    section_data[region] = {
+        "label": label,
+        "xy": rotate_xy(
+            sub.obsm["spatial"],
+            angle
+        ),
+        "expr": X,
+        "celltype": (
+            sub.obs["cell_type.detailed"]
+            .astype(str)
+            .to_numpy()
+        )
+    }
+
+    print(
+        label,
+        "| cells:",
+        sub.n_obs
+    )
+
+    del sub
+
+# Close the large backing file when extraction is done
+merfish.file.close()
+
+# ==========================================
+# 6. Figure layout: 2 x 2
+# ==========================================
+fig, axes = plt.subplots(
+    2, 2,
+    figsize=(13.5, 9.5)
+)
+
+for i, (ligand, receptor) in enumerate(pairs):
+
+    ax = axes.flat[i]
+
+    # Two spatial sections inside each panel
+    left_ax = ax.inset_axes(
+        [0.02, 0.09, 0.47, 0.74]
+    )
+
+    right_ax = ax.inset_axes(
+        [0.51, 0.09, 0.47, 0.74]
+    )
+
+    for si, (region, label, angle) in enumerate(sections):
+
+        spatial_ax = (
+            left_ax if si == 0
+            else right_ax
+        )
+
+        data = section_data[region]
+
+        xy = data["xy"]
+        X = data["expr"]
+        celltype = data["celltype"]
+
+        ligand_values = X[
+            :, genes.index(ligand)
+        ]
+
+        receptor_values = X[
+            :, genes.index(receptor)
+        ]
+
+        fib_mask = np.isin(
+            celltype, fib_labels
+        )
+
+        basal_mask = (
+            celltype == "Bas KC"
+        )
+
+        ligand_pos = (
+            fib_mask &
+            (ligand_values > 0)
+        )
+
+        receptor_pos = (
+            basal_mask &
+            (receptor_values > 0)
+        )
+
+        # Background: whole tissue
+        spatial_ax.scatter(
+            xy[:, 0],
+            xy[:, 1],
+            s=0.8,
+            c="#D9D9D9",
+            linewidths=0,
+            rasterized=True
+        )
+
+        # RED = ligand
+        spatial_ax.scatter(
+            xy[ligand_pos, 0],
+            xy[ligand_pos, 1],
+            s=5,
+            c="#D84B42",
+            linewidths=0,
+            rasterized=True
+        )
+
+        # BLUE = receptor
+        spatial_ax.scatter(
+            xy[receptor_pos, 0],
+            xy[receptor_pos, 1],
+            s=5,
+            c="#2879B9",
+            linewidths=0,
+            rasterized=True
+        )
+
+        spatial_ax.invert_yaxis()
+        spatial_ax.set_aspect("equal")
+        spatial_ax.axis("off")
+
+        spatial_ax.set_title(
+            label,
+            fontsize=9,
+            pad=3
+        )
+
+        print(
+            f"{ligand}-{receptor} | {label} | "
+            f"ligand+ Fib = {ligand_pos.sum()} | "
+            f"receptor+ Bas KC = {receptor_pos.sum()}"
+        )
+
+    # ======================================
+    # 7. Molecular annotations
+    # ======================================
+    ax.set_title(
+        f"{ligand}–{receptor}",
+        fontsize=12,
+        fontweight="bold",
+        pad=27
+    )
+
+    ax.text(
+        0.5,
+        1.01,
+        f"red = {ligand}   |   blue = {receptor}",
+        transform=ax.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=9,
+        color="#555555"
+    )
+
+    ax.axis("off")
+
+# ==========================================
+# 8. Figure title / legend
+# ==========================================
+legend = [
+    Line2D(
+        [0], [0],
+        marker="o",
+        linestyle="",
+        color="#D84B42",
+        markersize=6,
+        label="Ligand"
+    ),
+    Line2D(
+        [0], [0],
+        marker="o",
+        linestyle="",
+        color="#2879B9",
+        markersize=6,
+        label="Receptor"
+    ),
+    Line2D(
+        [0], [0],
+        marker="o",
+        linestyle="",
+        color="#D9D9D9",
+        markersize=6,
+        label="Other cells"
+    )
+]
+
+fig.legend(
+    handles=legend,
+    loc="lower center",
+    bbox_to_anchor=(0.5, 0.015),
+    ncol=3,
+    frameon=False,
+    fontsize=9
+)
+
+fig.suptitle(
+    "Spatial distribution of candidate fibroblast–basal KC signalling axes",
+    fontsize=14,
+    fontweight="bold",
+    y=0.99
+)
+
+fig.subplots_adjust(
+    left=0.035,
+    right=0.98,
+    top=0.88,
+    bottom=0.09,
+    wspace=0.10,
+    hspace=0.24
+)
+
+# ==========================================
+# 9. Save figures
+# ==========================================
+png = outdir / "Fig4B_Spatial_Signalling_Final.png"
+pdf = outdir / "Fig4B_Spatial_Signalling_Final.pdf"
+
+fig.savefig(
+    png,
+    dpi=220,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+fig.savefig(
+    pdf,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+plt.show()
+plt.close(fig)
+
+print("\nSaved PNG:", png)
+print("Saved PDF:", pdf)
